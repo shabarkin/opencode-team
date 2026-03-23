@@ -75,6 +75,41 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       vcs: VcsInfo | undefined
       path: Path
       workspaceList: Workspace[]
+      team: {
+        [sessionID: string]: {
+          teamName: string
+          role: "lead" | "member"
+          memberName?: string
+          delegate?: boolean
+          members: Array<{
+            name: string
+            sessionID: string
+            agent: string
+            status: "ready" | "busy" | "shutdown_requested" | "shutdown" | "error"
+            execution_status:
+              | "idle"
+              | "starting"
+              | "running"
+              | "cancel_requested"
+              | "cancelling"
+              | "cancelled"
+              | "completing"
+              | "completed"
+              | "failed"
+              | "timed_out"
+            model?: string
+            planApproval?: "none" | "pending" | "approved" | "rejected"
+          }>
+          tasks: Array<{
+            id: string
+            content: string
+            status: string
+            priority: string
+            assignee?: string
+            depends_on?: string[]
+          }>
+        }
+      }
     }>({
       provider_next: {
         all: [],
@@ -103,6 +138,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       vcs: undefined,
       path: { state: "", config: "", worktree: "", directory: "" },
       workspaceList: [],
+      team: {},
     })
 
     const sdk = useSDK()
@@ -348,6 +384,24 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         case "vcs.branch.updated": {
           setStore("vcs", { branch: event.properties.branch })
           break
+        }
+
+      }
+
+      // Team events — handled outside the typed switch since team event types
+      // aren't in the SDK event union yet (they come from BusEvent.define in team/events.ts)
+      const type = (event as { type: string }).type
+      if (type.startsWith("team.")) {
+        // Refresh team data from the server for all active sessions
+        for (const sessionID of Object.keys(store.session_status)) {
+          fetch(`/team/by-session/${sessionID}`)
+            .then((res) => res.ok ? res.json() : null)
+            .then((data) => {
+              if (data) {
+                setStore("team", sessionID, reconcile(data as any))
+              }
+            })
+            .catch(() => {})
         }
       }
     })
