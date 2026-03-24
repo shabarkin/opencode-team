@@ -1,8 +1,11 @@
 import z from "zod"
 import { BusEvent } from "../bus/bus-event"
 
-export const MemberStatus = z.enum(["ready", "busy", "shutdown_requested", "shutdown", "error"])
+export const MemberStatus = z.enum(["ready", "busy", "paused", "shutdown_requested", "shutdown", "error"])
 export type MemberStatus = z.infer<typeof MemberStatus>
+
+export const CheckpointMode = z.enum(["none", "after_each_write", "after_each_tool"])
+export type CheckpointMode = z.infer<typeof CheckpointMode>
 
 export const ExecutionStatus = z.enum([
   "idle",
@@ -38,8 +41,20 @@ export const TeamMemberSchema = z.object({
   /** Model this teammate is using, in "providerID/modelID" format. */
   model: z.string().optional(),
   planApproval: z.enum(["none", "pending", "approved", "rejected"]).optional(),
+  checkpoint: CheckpointMode.optional(),
 })
 export type TeamMember = z.infer<typeof TeamMemberSchema>
+
+export const PendingSpawnRequestSchema = z.object({
+  id: z.string(),
+  requested_by: SafeName,
+  agent: z.string(),
+  rationale: z.string(),
+  name: SafeName.optional(),
+  prompt: z.string().optional(),
+  created: z.number(),
+})
+export type PendingSpawnRequest = z.infer<typeof PendingSpawnRequestSchema>
 
 export const TeamInfoSchema = z.object({
   name: SafeName,
@@ -47,6 +62,7 @@ export const TeamInfoSchema = z.object({
   members: z.array(TeamMemberSchema),
   created: z.number(),
   delegate: z.boolean().optional(),
+  pending_spawn_requests: z.array(PendingSpawnRequestSchema).optional(),
 })
 export type TeamInfo = z.infer<typeof TeamInfoSchema>
 
@@ -142,6 +158,14 @@ export namespace TeamEvent {
       teamName: z.string(),
       taskId: z.string(),
       memberName: z.string(),
+    }),
+  )
+
+  export const SpawnRequested = BusEvent.define(
+    "team.spawn.requested",
+    z.object({
+      teamName: z.string(),
+      request: PendingSpawnRequestSchema,
     }),
   )
 

@@ -1,14 +1,22 @@
 import z from "zod"
 import { Tool } from "./tool"
-import { Team, TeamTasks, TeamNameSchema, MemberNameSchema, addDelegateRules, type TeamTask } from "../team"
+import {
+  Team,
+  TeamTasks,
+  TeamNameSchema,
+  MemberNameSchema,
+  CheckpointMode,
+  addDelegateRules,
+  type TeamTask,
+} from "../team"
 import { TeamMessaging } from "../team/messaging"
 import { Session } from "../session"
 import { Agent } from "../agent/agent"
-import { Provider } from "../provider/provider"
 import { Bus } from "../bus"
 import { TeamEvent } from "../team/events"
 import { TeamStatusTool } from "./team-status"
 import { TeamNotepadTool } from "./team-notepad"
+import { TeamPolicy } from "../team/policy"
 
 const SHUTDOWN_TIMEOUT = 30_000
 
@@ -166,7 +174,9 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
       "SUBAGENT RELAY: If subagents are used, they CANNOT communicate with the team directly; " +
       "teammates are responsible for relaying any relevant findings.",
     parameters: z.object({
-      name: MemberNameSchema.describe("Unique name for this teammate, e.g. 'security-reviewer', 'frontend-impl'"),
+      name: MemberNameSchema.optional().describe(
+        "Unique name for this teammate, e.g. 'security-reviewer', 'frontend-impl'",
+      ),
       agent: z
         .string()
         .optional()
@@ -179,8 +189,13 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
             "'google/gemini-2.5-pro', 'openai/gpt-4.1'. Must be a model available in your configured providers " +
             "(the same models shown by /models). If omitted, inherits the agent's default or the lead's current model.",
         ),
-      prompt: z.string().describe("Initial instructions for the teammate — what they should work on"),
+      prompt: z.string().optional().describe("Initial instructions for the teammate — what they should work on"),
       claim_task: z.string().optional().describe("Task ID to auto-claim for this teammate"),
+      from_request: z.string().optional().describe("Approve or reject a pending spawn request by ID"),
+      reject_reason: z
+        .string()
+        .optional()
+        .describe("If set with from_request, rejects that spawn request with this reason"),
       timeout: z
         .number()
         .optional()
@@ -194,8 +209,14 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
             "The teammate should research, then send their plan to the lead via team_message. " +
             "The lead can then use team_approve_plan to grant write access.",
         ),
+      checkpoint: CheckpointMode.optional().describe(
+        "Optional checkpoint mode. Use 'after_each_write' to pause after write/edit/bash/apply_patch, " +
+          "'after_each_tool' to pause after every tool call, or 'none' to disable checkpoints.",
+      ),
     }),
     async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
+      let requestedBy = "lead"
+
       // Reserve "lead" — it's used as a routing keyword in messaging
       if (params.name === "lead") {
         return {
@@ -223,8 +244,46 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
       }
       const teamName = teamInfo.team.name
 
+      const request = params.from_request ? await Team.getSpawnRequest(teamName, params.from_request) : undefined
+      if (params.from_request && !request) {
+        return {
+          title: "Error",
+          output: `Spawn request "${params.from_request}" not found.`,
+          metadata: {},
+        }
+      }
+      if (request) requestedBy = request.requested_by
+
+      if (request && params.reject_reason) {
+        await Team.rejectSpawnRequest({
+          teamName,
+          requestID: request.id,
+          reason: params.reject_reason,
+        })
+        await TeamMessaging.send({
+          teamName,
+          from: "lead",
+          to: request.requested_by,
+          text: `Your spawn request (${request.id}) was rejected. Reason: ${params.reject_reason}`,
+        }).catch(() => {})
+        return {
+          title: `Rejected spawn request: ${request.id}`,
+          output: `Rejected spawn request "${request.id}" from "${request.requested_by}".`,
+          metadata: { requestID: request.id, rejected: true },
+        }
+      }
+
+      const name = params.name ?? request?.name
+      const prompt = params.prompt ?? request?.prompt
+      if (!name) {
+        return { title: "Error", output: "No teammate name provided.", metadata: {} }
+      }
+      if (!prompt) {
+        return { title: "Error", output: "No teammate prompt provided.", metadata: {} }
+      }
+
       // Resolve agent
-      const agentName = params.agent ?? "general"
+      const agentName = params.agent ?? request?.agent ?? "general"
       const agent = await Agent.get(agentName)
       if (!agent || agent.mode === "primary" || agent.hidden === true) {
         return {
@@ -236,32 +295,11 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
 
       // Resolve the model for this teammate early — fail fast before creating session.
       // Priority: explicit params.model > agent.model > lead's current model > default
-      const model = await (async () => {
-        // 1. Explicit model param — parse and validate against configured providers
-        if (params.model) {
-          const parsed = Provider.parseModel(params.model)
-          try {
-            await Provider.getModel(parsed.providerID, parsed.modelID)
-          } catch (e: unknown) {
-            if (Provider.ModelNotFoundError.isInstance(e)) {
-              const suggestions = e.data.suggestions?.length ? ` Did you mean: ${e.data.suggestions.join(", ")}?` : ""
-              return { error: `Model not found: ${params.model}.${suggestions}` } as const
-            }
-            throw e
-          }
-          return parsed
-        }
-        // 2. Agent's configured model
-        if (agent.model) return agent.model
-        // 3. Lead's current model (from the last user message in the lead's session)
-        const lastUser = ctx.messages.findLast((m) => m.info.role === "user")
-        if (lastUser) {
-          const info = lastUser.info as { model: { providerID: string; modelID: string } }
-          return info.model
-        }
-        // 4. Global default model
-        return await Provider.defaultModel()
-      })()
+      const model = await Team.resolveModel({
+        model: params.model,
+        agent,
+        messages: ctx.messages,
+      })
 
       // Bail out if model resolution failed
       if ("error" in model) {
@@ -274,25 +312,38 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
 
       const spawned = await Team.spawnMember({
         teamName,
-        name: params.name,
+        name,
         parentSessionID: ctx.sessionID,
+        requestedBy,
         agent,
         model,
-        prompt: params.prompt,
+        prompt,
         claimTask: params.claim_task,
         planApproval: !!params.require_plan_approval,
+        checkpoint: params.checkpoint ?? "none",
         timeout: params.timeout,
       })
 
+      if (request) {
+        await Team.removeSpawnRequest(teamName, request.id)
+        await TeamMessaging.send({
+          teamName,
+          from: "lead",
+          to: request.requested_by,
+          text: `Your spawn request (${request.id}) was approved. Teammate "${name}" is now active in the team.`,
+        }).catch(() => {})
+      }
+
       return {
-        title: `Spawned teammate: ${params.name}`,
+        title: `Spawned teammate: ${name}`,
         output: [
-          `Teammate "${params.name}" spawned with agent "${agentName}" using model ${spawned.label}.`,
+          `Teammate "${name}" spawned with agent "${agentName}" using model ${spawned.label}.`,
           `Session ID: ${spawned.sessionID}`,
           params.claim_task ? `Auto-claimed task: ${params.claim_task}` : "",
           params.require_plan_approval
             ? "Plan approval REQUIRED: teammate is in read-only mode until you approve their plan with team_approve_plan."
             : "",
+          (params.checkpoint ?? "none") !== "none" ? `Checkpoint mode enabled: ${params.checkpoint ?? "none"}.` : "",
           "",
           "The teammate is now working independently in the background.",
           "Messages from the teammate will be delivered automatically when they finish or need help.",
@@ -301,11 +352,90 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
           .join("\n"),
         metadata: {
           teamName,
-          memberName: params.name,
+          memberName: name,
           sessionID: spawned.sessionID,
           model: spawned.label,
           planApproval: params.require_plan_approval,
+          checkpoint: params.checkpoint ?? "none",
         },
+      }
+    },
+  }
+})
+
+export const TeamRequestSpawnTool = Tool.define("team_request_spawn", async () => {
+  const agents = (await Agent.list())
+    .filter((item) => item.mode !== "primary" && item.hidden !== true)
+    .toSorted((a, b) => a.name.localeCompare(b.name))
+  const names = agents.map((item) => item.name)
+
+  return {
+    description:
+      "Request that the team lead spawn a new teammate. Use this when you discover the team needs " +
+      "additional specialization mid-task. The lead can approve or reject the request, and plugins can " +
+      "auto-approve or auto-deny it.",
+    parameters: z.object({
+      agent: z.string().describe(`Exact agent name to request. Available: ${names.join(", ")}.`),
+      name: MemberNameSchema.optional().describe("Optional suggested teammate name"),
+      rationale: z.string().describe("Why this teammate is needed"),
+      prompt: z.string().optional().describe("Optional suggested prompt for the new teammate"),
+    }),
+    async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
+      const teamInfo = await Team.findBySession(ctx.sessionID)
+      if (!teamInfo || teamInfo.role !== "member" || !teamInfo.memberName) {
+        return {
+          title: "Error",
+          output: "Only teammates can request new spawns. The lead should use team_spawn directly.",
+          metadata: {},
+        }
+      }
+
+      const agent = await Agent.get(params.agent)
+      if (!agent || agent.mode === "primary" || agent.hidden === true) {
+        return {
+          title: "Error",
+          output: `Agent "${params.agent}" not found. Available agents: ${names.join(", ")}`,
+          metadata: {},
+        }
+      }
+
+      const result = await Team.requestSpawn({
+        teamName: teamInfo.team.name,
+        requestedBy: teamInfo.memberName,
+        agent: params.agent,
+        rationale: params.rationale,
+        name: params.name,
+        prompt: params.prompt,
+        messages: ctx.messages,
+      })
+
+      if (result.status === "denied") {
+        return {
+          title: "Spawn request denied",
+          output: result.reason ?? "The spawn request was denied by team policy.",
+          metadata: {},
+        }
+      }
+
+      if (result.status === "approved") {
+        return {
+          title: `Spawned teammate: ${result.request.name ?? params.name ?? params.agent}`,
+          output: `Your spawn request was auto-approved. Teammate session ${result.sessionID} is now active using ${result.label}.`,
+          metadata: { requestID: result.request.id, sessionID: result.sessionID, approved: true },
+        }
+      }
+
+      await TeamMessaging.send({
+        teamName: teamInfo.team.name,
+        from: teamInfo.memberName,
+        to: "lead",
+        text: `Spawn request ${result.request.id}: please add ${params.agent}${params.name ? ` as "${params.name}"` : ""}. Rationale: ${params.rationale}`,
+      }).catch(() => {})
+
+      return {
+        title: `Spawn request submitted: ${result.request.id}`,
+        output: `Requested a new teammate from the lead. Request ID: ${result.request.id}.`,
+        metadata: { requestID: result.request.id },
       }
     },
   }
@@ -640,6 +770,21 @@ export const TeamShutdownTool = Tool.define("team_shutdown", {
 
     const status = member.status
     const reason = params.reason ?? "The lead has requested you shut down."
+    const tasks = await TeamTasks.list(teamInfo.team.name)
+    const guard = await TeamPolicy.shutdownBefore({
+      teamName: teamInfo.team.name,
+      name: params.name,
+      tasksRemaining: tasks.filter(
+        (task) => task.assignee === params.name && task.status !== "completed" && task.status !== "cancelled",
+      ).length,
+    })
+    if (!guard.allow) {
+      return {
+        title: "Shutdown blocked",
+        output: guard.reason ?? `Team policy blocked shutdown for "${params.name}".`,
+        metadata: {},
+      }
+    }
 
     // Transition to shutdown_requested BEFORE sending the message.
     // This ensures autoWake's .then() handler sees the correct status
@@ -874,6 +1019,7 @@ export const TeamRestartTool = Tool.define("team_restart", {
 export const TeamTools = [
   TeamCreateTool,
   TeamSpawnTool,
+  TeamRequestSpawnTool,
   TeamMessageTool,
   TeamBroadcastTool,
   TeamTasksTool,

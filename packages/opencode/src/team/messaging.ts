@@ -7,6 +7,7 @@ import { SessionID, MessageID, PartID } from "../session/schema"
 import { ProviderID, ModelID } from "../provider/schema"
 import { Team, TeamEvent } from "./index"
 import { Inbox } from "./inbox"
+import { TeamPolicy } from "./policy"
 
 const log = Log.create({ service: "team.messaging" })
 const MAX_TEXT = 10 * 1024
@@ -32,13 +33,23 @@ export namespace TeamMessaging {
    * a synthetic user message into their session (delivery mechanism),
    * then auto-wakes if idle.
    */
-  export async function send(input: { teamName: string; from: string; to: string; text: string }): Promise<void> {
-    validateText(input.text)
+  export async function send(input: {
+    teamName: string
+    from: string
+    to: string
+    text: string
+    type?: string
+    priority?: string
+  }): Promise<void> {
+    const policy = await TeamPolicy.messageSending(input)
+    if (!policy.allow) throw new Error(policy.reason ?? `Message to "${input.to}" was denied by team policy.`)
+    validateText(policy.text)
     const team = await Team.get(input.teamName)
     if (!team) throw new Error(`Team "${input.teamName}" not found`)
 
     // Find recipient session
     let targetSessionID: string | undefined
+    let paused = false
     if (input.to === "lead") {
       targetSessionID = team.leadSessionID
     } else {
@@ -46,6 +57,7 @@ export namespace TeamMessaging {
       if (!member) throw new Error(`Member "${input.to}" not found in team "${input.teamName}"`)
       if (member.status === "shutdown") throw new Error(`Member "${input.to}" has shut down`)
       targetSessionID = member.sessionID
+      paused = member.status === "paused"
     }
 
     if (!targetSessionID) throw new Error(`Could not find session for "${input.to}"`)
@@ -55,24 +67,25 @@ export namespace TeamMessaging {
     await Inbox.write(input.teamName, input.to, {
       id: inboxId,
       from: input.from,
-      text: input.text,
+      text: policy.text,
       timestamp: Date.now(),
     })
 
-    // Inject into session (delivery mechanism), tagged with inbox ID for dedup
-    await injectMessage(targetSessionID, input.from, input.text, inboxId)
+    if (!paused) {
+      await injectMessage(targetSessionID, input.from, policy.text, inboxId)
+    }
 
     log.info("message sent", { teamName: input.teamName, from: input.from, to: input.to })
     await Bus.publish(TeamEvent.Message, {
       teamName: input.teamName,
       from: input.from,
       to: input.to,
-      text: input.text,
+      text: policy.text,
     })
 
     // Auto-wake: if the recipient session is idle, start its prompt loop
     // so the LLM processes the injected message.
-    autoWake(targetSessionID, input.from)
+    if (!paused) autoWake(targetSessionID, input.from)
   }
 
   /**
@@ -95,13 +108,27 @@ export namespace TeamMessaging {
 
     const errors: Array<{ target: string; phase: string; error: string }> = []
     for (const target of targets) {
+      const policy = await TeamPolicy.messageSending({
+        teamName: input.teamName,
+        from: input.from,
+        to: target.name,
+        text: input.text,
+      })
+      if (!policy.allow) {
+        errors.push({ target: target.name, phase: "policy", error: policy.reason ?? "Denied by team policy" })
+        continue
+      }
+      validateText(policy.text)
+
       const inboxId = messageId()
+      const member = team.members.find((item) => item.name === target.name)
+      const paused = member?.status === "paused"
 
       // Write to inbox (source of truth)
       const wrote = await Inbox.write(input.teamName, target.name, {
         id: inboxId,
         from: input.from,
-        text: input.text,
+        text: policy.text,
         timestamp: Date.now(),
       }).then(
         () => true,
@@ -115,8 +142,8 @@ export namespace TeamMessaging {
 
       // Only inject if inbox write succeeded — no point delivering a message
       // that won't survive recovery
-      if (wrote) {
-        await injectMessage(target.sessionID, input.from, input.text, inboxId).catch((err) => {
+      if (wrote && !paused) {
+        await injectMessage(target.sessionID, input.from, policy.text, inboxId).catch((err) => {
           const msg = err instanceof Error ? err.message : String(err)
           log.warn("broadcast inject failed", { target: target.name, error: msg })
           errors.push({ target: target.name, phase: "inject", error: msg })
@@ -142,6 +169,8 @@ export namespace TeamMessaging {
 
     // Auto-wake all idle recipient sessions
     for (const target of targets) {
+      const member = team.members.find((item) => item.name === target.name)
+      if (member?.status === "paused") continue
       autoWake(target.sessionID, input.from)
     }
   }
@@ -192,15 +221,18 @@ export namespace TeamMessaging {
           })
         })
 
-        await injectMessage(senderSessionID, agentName, `[receipt] ${text}`, receiptId).catch((err: unknown) => {
-          log.warn("receipt inject failed", {
-            teamName,
-            sender,
-            error: err instanceof Error ? err.message : String(err),
+        const senderMember = team.members.find((item) => item.name === sender)
+        if (senderMember?.status !== "paused") {
+          await injectMessage(senderSessionID, agentName, `[receipt] ${text}`, receiptId).catch((err: unknown) => {
+            log.warn("receipt inject failed", {
+              teamName,
+              sender,
+              error: err instanceof Error ? err.message : String(err),
+            })
           })
-        })
 
-        autoWake(senderSessionID, agentName)
+          autoWake(senderSessionID, agentName)
+        }
       }
       log.info("delivery receipts sent", { teamName, from: agentName, senders: [...bySender.keys()] })
     }
@@ -255,27 +287,42 @@ export namespace TeamMessaging {
       const info = await Team.findBySession(sessionID)
       if (info && info.role === "member") {
         const member = info.team.members.find((m) => m.name === info.memberName)
-        if (member?.status === "shutdown") return
+        if (member?.status === "shutdown" || member?.status === "paused") return
+        if (member?.status !== "busy" && member?.status !== "shutdown_requested") {
+          await Team.transitionMemberStatus(info.team.name, info.memberName!, "busy", { force: true })
+        }
+        await Team.transitionExecutionStatus(info.team.name, info.memberName!, "starting", { force: true })
+        await Team.transitionExecutionStatus(info.team.name, info.memberName!, "running", { force: true })
       }
       log.info("auto-waking idle session", { sessionID, from })
       SessionPrompt.loop({ sessionID: SessionID.make(sessionID) })
         .then(async () => {
-          // When an auto-woken loop ends, check if shutdown was requested.
-          // Shutdown is authoritative — the teammate gets one loop to wrap up
-          // (summarize findings, send final messages) then transitions to shutdown.
-          // Both this handler and the spawn .then() check for shutdown_requested;
-          // transitionMemberStatus is idempotent (from === status returns early).
           const match = await Team.findBySession(sessionID)
           if (!match || match.role !== "member") return
+          await Team.transitionExecutionStatus(match.team.name, match.memberName!, "completing", { force: true })
+          await Team.transitionExecutionStatus(match.team.name, match.memberName!, "completed", { force: true })
+          await Team.transitionExecutionStatus(match.team.name, match.memberName!, "idle", { force: true })
           const team = await Team.get(match.team.name)
           const member = team?.members.find((m) => m.name === match.memberName)
           if (member?.status === "shutdown_requested") {
             await Team.transitionMemberStatus(match.team.name, match.memberName!, "shutdown")
             log.info("auto-wake loop completed shutdown", { teamName: match.team.name, name: match.memberName })
+            return
+          }
+          if (member?.status === "paused") return
+          if (member?.status === "busy") {
+            await Team.transitionMemberStatus(match.team.name, match.memberName!, "ready", { force: true })
           }
         })
-        .catch((err: unknown) => {
-          log.warn("auto-wake loop failed", { sessionID, error: err instanceof Error ? err.message : String(err) })
+        .catch(async (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err)
+          const match = await Team.findBySession(sessionID)
+          if (match && match.role === "member") {
+            await Team.transitionExecutionStatus(match.team.name, match.memberName!, "failed", { force: true })
+            await Team.transitionExecutionStatus(match.team.name, match.memberName!, "idle", { force: true })
+            await Team.transitionMemberStatus(match.team.name, match.memberName!, "error", { force: true })
+          }
+          log.warn("auto-wake loop failed", { sessionID, error: message })
         })
     } catch (err) {
       log.warn("auto-wake failed", { sessionID, error: err instanceof Error ? (err as Error).message : String(err) })

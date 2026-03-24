@@ -115,6 +115,9 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                     <b>Team</b>{" "}
                     <span style={{ fg: theme.textMuted }}>
                       {teamData().teamName} ({teamData().role}){teamData().delegate ? " [delegate]" : ""}
+                      {teamData().pendingSpawnRequests?.length
+                        ? ` [${teamData().pendingSpawnRequests.length} spawn request${teamData().pendingSpawnRequests.length === 1 ? "" : "s"}]`
+                        : ""}
                     </span>
                   </text>
                   <Show when={teamData().role === "member"}>
@@ -142,6 +145,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                             fg: (
                               {
                                 busy: theme.warning,
+                                paused: theme.warning,
                                 ready: theme.success,
                                 shutdown: theme.textMuted,
                                 shutdown_requested: theme.warning,
@@ -152,13 +156,15 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                         >
                           {m.status === "busy"
                             ? "*"
-                            : m.status === "ready"
-                              ? "o"
-                              : m.status === "shutdown"
-                                ? "x"
-                                : m.status === "error"
-                                  ? "E"
-                                  : "!"}
+                            : m.status === "paused"
+                              ? "||"
+                              : m.status === "ready"
+                                ? "o"
+                                : m.status === "shutdown"
+                                  ? "x"
+                                  : m.status === "error"
+                                    ? "E"
+                                    : "!"}
                         </text>
                         <text fg={theme.text} wrapMode="word">
                           {m.name}{" "}

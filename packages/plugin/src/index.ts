@@ -211,6 +211,49 @@ export interface Hooks {
       metadata: any
     },
   ) => Promise<void>
+  "team.member.spawning"?: (
+    input: {
+      teamName: string
+      name: string
+      agent: string
+      model: string
+      requestedBy: string
+      currentMemberCount: number
+    },
+    output: { allow: boolean; reason?: string },
+  ) => Promise<void>
+  "team.member.spawned"?: (
+    input: { teamName: string; name: string; agent: string; sessionID: string },
+    output: {},
+  ) => Promise<void>
+  "team.message.sending"?: (
+    input: { teamName: string; from: string; to: string; type?: string; priority?: string },
+    output: { text: string; allow: boolean; reason?: string },
+  ) => Promise<void>
+  "team.member.idle"?: (
+    input: { teamName: string; name: string; agent: string; executionStatus: string; runtime: number },
+    output: {},
+  ) => Promise<void>
+  "team.shutdown.before"?: (
+    input: { teamName: string; name: string; tasksRemaining: number },
+    output: { allow: boolean; reason?: string },
+  ) => Promise<void>
+  "team.task.claimed"?: (
+    input: { teamName: string; taskId: string; taskContent: string; claimedBy: string },
+    output: {},
+  ) => Promise<void>
+  "team.budget.check"?: (
+    input: { teamName: string; currentCost: number; memberCosts: Record<string, number> },
+    output: { action: "continue" | "warn" | "pause_all" | "shutdown_all"; message?: string },
+  ) => Promise<void>
+  "team.spawn.requested"?: (
+    input: { teamName: string; requestedBy: string; agent: string; rationale: string },
+    output: { action: "approve" | "deny" | "ask_lead"; reason?: string },
+  ) => Promise<void>
+  "team.conflict.detected"?: (
+    input: { teamName: string; file: string; editors: string[] },
+    output: { action: "warn" | "block" | "ignore" },
+  ) => Promise<void>
   "experimental.chat.messages.transform"?: (
     input: {},
     output: {

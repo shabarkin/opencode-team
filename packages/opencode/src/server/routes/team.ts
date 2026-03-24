@@ -22,6 +22,16 @@ const TeamSteer = z.object({
   member: MemberNameSchema,
   text: z.string(),
 })
+const TeamPause = z.object({
+  member: MemberNameSchema,
+})
+const TeamResume = z.object({
+  member: MemberNameSchema,
+  redirect: z.string().optional(),
+})
+const TeamSteerAll = z.object({
+  text: z.string(),
+})
 
 const TeamSessionResponse = z.object({
   team: TeamInfoSessionSchema,
@@ -53,7 +63,9 @@ function publicTeam(team: Info) {
       execution_status: member.execution_status,
       model: member.model,
       planApproval: member.planApproval,
+      checkpoint: member.checkpoint,
     })),
+    pending_spawn_requests: team.pending_spawn_requests,
   }
 }
 
@@ -70,7 +82,9 @@ function sessionTeam(team: Info) {
       execution_status: member.execution_status,
       model: member.model,
       planApproval: member.planApproval,
+      checkpoint: member.checkpoint,
     })),
+    pending_spawn_requests: team.pending_spawn_requests,
   }
 }
 
@@ -218,7 +232,7 @@ export const TeamRoutes = lazy(() =>
             description: "Teammate steered",
             content: {
               "application/json": {
-                schema: resolver(z.object({ ok: z.literal(true), action: z.enum(["restart", "message"]) })),
+                schema: resolver(z.object({ ok: z.literal(true), action: z.enum(["restart", "resume", "message"]) })),
               },
             },
           },
@@ -246,6 +260,95 @@ export const TeamRoutes = lazy(() =>
           text,
         })
         return c.json({ ok: true as const, action })
+      },
+    )
+    .post(
+      "/:name/pause",
+      describeRoute({
+        summary: "Pause teammate",
+        description: "Pause a teammate without shutting down their session.",
+        operationId: "team.pause",
+        responses: {
+          200: { description: "Teammate paused" },
+          ...errors(403, 404),
+        },
+      }),
+      validator("param", z.object({ name: TeamNameSchema })),
+      validator("json", TeamPause),
+      async (c) => {
+        const sid = caller(c)
+        if (!sid) return c.json({ error: "Forbidden" }, 403)
+
+        const { name } = c.req.valid("param")
+        const { member } = c.req.valid("json")
+        const match = await Team.findBySession(sid)
+        if (!match || match.role !== "lead" || match.team.name !== name) return c.json({ error: "Forbidden" }, 403)
+
+        const team = await Team.get(name)
+        if (!team) return c.json({ error: "Team not found" }, 404)
+        if (!team.members.some((item) => item.name === member)) return c.json({ error: "Teammate not found" }, 404)
+
+        await Team.pause({ teamName: name, memberName: member })
+        return c.json({ ok: true as const })
+      },
+    )
+    .post(
+      "/:name/resume",
+      describeRoute({
+        summary: "Resume teammate",
+        description: "Resume a paused teammate, optionally with a redirect message.",
+        operationId: "team.resume",
+        responses: {
+          200: { description: "Teammate resumed" },
+          ...errors(403, 404),
+        },
+      }),
+      validator("param", z.object({ name: TeamNameSchema })),
+      validator("json", TeamResume),
+      async (c) => {
+        const sid = caller(c)
+        if (!sid) return c.json({ error: "Forbidden" }, 403)
+
+        const { name } = c.req.valid("param")
+        const { member, redirect } = c.req.valid("json")
+        const match = await Team.findBySession(sid)
+        if (!match || match.role !== "lead" || match.team.name !== name) return c.json({ error: "Forbidden" }, 403)
+
+        const team = await Team.get(name)
+        if (!team) return c.json({ error: "Team not found" }, 404)
+        if (!team.members.some((item) => item.name === member)) return c.json({ error: "Teammate not found" }, 404)
+
+        await Team.resume({ teamName: name, memberName: member, redirect })
+        return c.json({ ok: true as const })
+      },
+    )
+    .post(
+      "/:name/steer-all",
+      describeRoute({
+        summary: "Steer all teammates",
+        description: "Broadcast new instructions to all active teammates.",
+        operationId: "team.steerAll",
+        responses: {
+          200: { description: "Instructions broadcast" },
+          ...errors(403, 404),
+        },
+      }),
+      validator("param", z.object({ name: TeamNameSchema })),
+      validator("json", TeamSteerAll),
+      async (c) => {
+        const sid = caller(c)
+        if (!sid) return c.json({ error: "Forbidden" }, 403)
+
+        const { name } = c.req.valid("param")
+        const { text } = c.req.valid("json")
+        const match = await Team.findBySession(sid)
+        if (!match || match.role !== "lead" || match.team.name !== name) return c.json({ error: "Forbidden" }, 403)
+
+        const team = await Team.get(name)
+        if (!team) return c.json({ error: "Team not found" }, 404)
+
+        await Team.steerAll({ teamName: name, text })
+        return c.json({ ok: true as const })
       },
     )
     .post(

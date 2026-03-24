@@ -47,6 +47,7 @@ export async function InstanceBootstrap() {
         })
         .finally(() => {
           Team.autoCleanup()
+          Team.checkpoints()
         })
       // File conflict detection
       import("../team/files").then(({ initFileTracking }) => initFileTracking())

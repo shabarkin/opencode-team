@@ -10,29 +10,38 @@ import {
   TeamNameSchema,
   MemberNameSchema,
   MemberStatus as MemberStatusSchema,
+  CheckpointMode,
   ExecutionStatus,
   TeamInfoSchema,
   TeamMemberSchema,
   TeamTaskSchema,
+  PendingSpawnRequestSchema,
   type TeamInfo,
   type TeamMember,
   type TeamTask,
   type MemberStatus,
+  type CheckpointMode as CheckpointModeType,
+  type PendingSpawnRequest,
   type ExecutionStatus as ExecutionStatusType,
 } from "./events"
+import { TeamPolicy } from "./policy"
+import { MessageV2 } from "../session/message-v2"
 
 export {
   TeamEvent,
   TeamNameSchema,
   MemberNameSchema,
+  CheckpointMode,
   ExecutionStatus,
   TeamInfoSchema,
   TeamInfoPublicSchema,
   TeamInfoSessionSchema,
   TeamTaskSchema,
+  PendingSpawnRequestSchema,
   type TeamInfo,
   type TeamMember,
   type TeamTask,
+  type PendingSpawnRequest,
 } from "./events"
 
 /** Write tools that are denied during plan-approval or delegate mode */
@@ -86,6 +95,7 @@ const TERMINAL_EXECUTION_STATES = new Set<ExecutionStatusType>([
 const CREATE_LOCK_KEY = () => `team:create:${Instance.project.id}`
 const AUTO_CLEANUP_GRACE = 60_000
 const auto = new Map<string, ReturnType<typeof setTimeout>>()
+const checkpoint = new Set<string>()
 
 function autoKey(name: string) {
   return `${Instance.project.id}:${name}`
@@ -101,8 +111,9 @@ function clearAuto(name: string) {
 }
 
 const MEMBER_TRANSITIONS: Record<MemberStatus, MemberStatus[]> = {
-  ready: ["busy", "shutdown_requested", "shutdown", "error"],
-  busy: ["ready", "shutdown_requested", "error"],
+  ready: ["busy", "paused", "shutdown_requested", "shutdown", "error"],
+  busy: ["ready", "paused", "shutdown_requested", "error"],
+  paused: ["busy", "shutdown_requested", "shutdown", "error"],
   shutdown_requested: ["shutdown", "error"],
   shutdown: [],
   error: ["ready", "shutdown_requested", "shutdown"],
@@ -132,6 +143,7 @@ function normalizeMember(member: TeamMember): TeamMember {
     ...member,
     status,
     execution_status,
+    checkpoint: CheckpointMode.safeParse(member.checkpoint).success ? member.checkpoint : "none",
   }
 }
 
@@ -139,7 +151,24 @@ function normalizeTeam(team: TeamInfo): TeamInfo {
   return {
     ...team,
     members: team.members.map(normalizeMember),
+    pending_spawn_requests: (team.pending_spawn_requests ?? []).map((item) => PendingSpawnRequestSchema.parse(item)),
   }
+}
+
+function spawnRequestId() {
+  return `spr_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+function checkpointText(mode: CheckpointModeType) {
+  if (mode === "after_each_write") return "after each write/edit/bash/apply_patch tool call"
+  if (mode === "after_each_tool") return "after each tool call"
+  return ""
+}
+
+function checkpointMatch(mode: CheckpointModeType, tool: string) {
+  if (mode === "after_each_tool") return true
+  if (mode === "after_each_write") return WRITE_TOOLS.includes(tool as (typeof WRITE_TOOLS)[number])
+  return false
 }
 
 function canTransition<T extends string>(current: T, next: T, map: Record<T, T[]>) {
@@ -191,7 +220,7 @@ export namespace Team {
 
           log.info("auto-cleanup grace elapsed, cleaning team", { teamName: next.name, grace })
           try {
-            await cleanup(next.name)
+            await Team.cleanup(next.name)
           } catch (err: unknown) {
             log.warn("auto-cleanup failed", {
               teamName: next.name,
@@ -276,6 +305,7 @@ export namespace Team {
         leadSessionID: input.leadSessionID,
         members: [],
         created: Date.now(),
+        pending_spawn_requests: [],
         ...(input.delegate ? { delegate: true } : {}),
       }
 
@@ -349,14 +379,21 @@ export namespace Team {
     options?: { guard?: boolean; force?: boolean },
   ): Promise<boolean> {
     let changed = false
+    let agent = ""
+    let executionStatus: ExecutionStatusType = "idle"
+    let runtime = 0
     try {
       await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
         const member = draft.members.find((m) => m.name === memberName)
         if (!member) return
         if (options?.guard && member.status === "shutdown") return
-        const from = member.status
+        const next = normalizeMember(member)
+        const from = next.status
         if (!options?.force && !canTransition(from, status, MEMBER_TRANSITIONS)) return
         if (from === status) return
+        agent = next.agent
+        executionStatus = next.execution_status ?? "idle"
+        runtime = next.started ? Math.max(0, Date.now() - next.started) : 0
         member.status = status
         member.updated = Date.now()
         changed = true
@@ -366,6 +403,16 @@ export namespace Team {
     }
     if (!changed) return false
     await Bus.publish(TeamEvent.MemberStatusChanged, { teamName, memberName, status })
+    if (status === "ready") {
+      await TeamPolicy.memberIdle({
+        teamName,
+        name: memberName,
+        agent,
+        executionStatus,
+        runtime,
+      })
+      await TeamPolicy.checkBudget(teamName)
+    }
     return true
   }
 
@@ -440,6 +487,129 @@ export namespace Team {
     } catch {
       // Team not found — ignore
     }
+  }
+
+  export async function setMemberCheckpoint(
+    teamName: string,
+    memberName: string,
+    mode: CheckpointModeType,
+  ): Promise<void> {
+    try {
+      await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+        const member = draft.members.find((m) => m.name === memberName)
+        if (!member) return
+        member.checkpoint = mode
+      })
+    } catch {
+      // Team not found — ignore
+    }
+  }
+
+  export async function listSpawnRequests(teamName: string): Promise<PendingSpawnRequest[]> {
+    const team = await get(teamName)
+    return team?.pending_spawn_requests ?? []
+  }
+
+  export async function getSpawnRequest(teamName: string, requestID: string): Promise<PendingSpawnRequest | undefined> {
+    const team = await get(teamName)
+    return team?.pending_spawn_requests?.find((item) => item.id === requestID)
+  }
+
+  export async function removeSpawnRequest(
+    teamName: string,
+    requestID: string,
+  ): Promise<PendingSpawnRequest | undefined> {
+    let found: PendingSpawnRequest | undefined
+    try {
+      await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+        const list = draft.pending_spawn_requests ?? []
+        const next = list.find((item) => item.id === requestID)
+        if (!next) return
+        found = PendingSpawnRequestSchema.parse(next)
+        draft.pending_spawn_requests = list.filter((item) => item.id !== requestID)
+      })
+    } catch {
+      return undefined
+    }
+    return found
+  }
+
+  export async function requestSpawn(input: {
+    teamName: string
+    requestedBy: string
+    agent: string
+    rationale: string
+    name?: string
+    prompt?: string
+    messages: Array<{ info: { role: string; model?: { providerID: string; modelID: string } } }>
+  }): Promise<
+    | { status: "pending"; request: PendingSpawnRequest }
+    | { status: "denied"; reason?: string }
+    | { status: "approved"; request: PendingSpawnRequest; sessionID: string; label: string }
+  > {
+    const team = await get(input.teamName)
+    if (!team) throw new Error(`Team "${input.teamName}" not found`)
+
+    const request = PendingSpawnRequestSchema.parse({
+      id: spawnRequestId(),
+      requested_by: input.requestedBy,
+      agent: input.agent,
+      rationale: input.rationale,
+      name: input.name,
+      prompt: input.prompt,
+      created: Date.now(),
+    })
+
+    const decision = await TeamPolicy.spawnRequested({
+      teamName: input.teamName,
+      requestedBy: input.requestedBy,
+      agent: input.agent,
+      rationale: input.rationale,
+    })
+
+    if (decision.action === "deny") {
+      return { status: "denied", reason: decision.reason }
+    }
+
+    if (decision.action === "approve") {
+      const { Agent } = await import("../agent/agent")
+      const agent = await Agent.get(input.agent)
+      if (!agent || agent.mode === "primary" || agent.hidden === true) {
+        throw new Error(`Agent "${input.agent}" not found.`)
+      }
+      const model = await resolveModel({ agent, messages: input.messages })
+      if ("error" in model) throw new Error(model.error)
+      const spawned = await spawnMember({
+        teamName: input.teamName,
+        name: request.name ?? `${input.agent}-${request.id.slice(-4)}`,
+        parentSessionID: team.leadSessionID,
+        requestedBy: input.requestedBy,
+        agent,
+        model,
+        prompt:
+          request.prompt ??
+          [`You were requested by teammate "${input.requestedBy}".`, `Rationale: ${input.rationale}`].join("\n"),
+        planApproval: false,
+        checkpoint: "none",
+      })
+      return { status: "approved", request, sessionID: spawned.sessionID, label: spawned.label }
+    }
+
+    await Storage.update<TeamInfo>(configKey(input.teamName), (draft) => {
+      draft.pending_spawn_requests = [...(draft.pending_spawn_requests ?? []), request]
+    })
+    await Bus.publish(TeamEvent.SpawnRequested, { teamName: input.teamName, request })
+    return { status: "pending", request }
+  }
+
+  export async function rejectSpawnRequest(input: {
+    teamName: string
+    requestID: string
+    reason?: string
+  }): Promise<PendingSpawnRequest> {
+    const request = await removeSpawnRequest(input.teamName, input.requestID)
+    if (!request) throw new Error(`Spawn request "${input.requestID}" not found.`)
+    return request
   }
 
   /**
@@ -553,21 +723,35 @@ export namespace Team {
     teamName: string
     name: string
     parentSessionID: string
+    requestedBy?: string
     agent: { name: string; prompt?: string; skills?: string[] }
     model: { providerID: string; modelID: string }
     prompt: string
     claimTask?: string
     planApproval: boolean
+    checkpoint: CheckpointModeType
     timeout?: number
     maxTokens?: number
   }): Promise<{ sessionID: string; label: string }> {
     const { Session } = await import("../session")
     const { SessionPrompt } = await import("../session/prompt")
-    const { Identifier } = await import("../id/id")
     const { Instance: Inst } = await import("../project/instance")
-    const { TeamMessaging } = await import("./messaging")
 
     const label = `${input.model.providerID}/${input.model.modelID}`
+    const team = await get(input.teamName)
+    if (!team) throw new Error(`Team "${input.teamName}" not found`)
+
+    const spawn = await TeamPolicy.memberSpawning({
+      teamName: input.teamName,
+      name: input.name,
+      agent: input.agent.name,
+      model: label,
+      requestedBy: input.requestedBy ?? "lead",
+      currentMemberCount: team.members.length,
+    })
+    if (!spawn.allow) {
+      throw new Error(spawn.reason ?? `Spawning teammate "${input.name}" was denied by team policy.`)
+    }
 
     // Build permission rules for the child session
     const rules: Array<{ permission: string; pattern: string; action: "deny" | "allow" }> = [
@@ -606,6 +790,7 @@ export namespace Team {
         prompt: input.prompt,
         model: label,
         planApproval: input.planApproval ? "pending" : "none",
+        checkpoint: input.checkpoint,
       })
     } catch (err) {
       // Orphaned session cleanup
@@ -638,6 +823,16 @@ export namespace Team {
         ]
       : []
 
+    const checkpointInstructions =
+      input.checkpoint !== "none"
+        ? [
+            "",
+            `CHECKPOINT MODE: The system will pause you ${checkpointText(input.checkpoint)} for lead review.`,
+            "When resumed, review the latest team message and continue from there.",
+            "",
+          ]
+        : []
+
     const skillContext = input.agent.skills?.length
       ? [
           "",
@@ -650,10 +845,10 @@ export namespace Team {
     // Gather team state for context injection
     const { TeamNotepad } = await import("./notepad")
     const notepadCtx = await TeamNotepad.context(input.teamName).catch(() => "")
-    const team = await get(input.teamName)
+    const state = await get(input.teamName)
     const tasks = await TeamTasks.list(input.teamName)
 
-    const otherMembers = team?.members.filter((m) => m.name !== input.name && m.status !== "shutdown") ?? []
+    const otherMembers = state?.members.filter((m) => m.name !== input.name && m.status !== "shutdown") ?? []
     const peerList =
       otherMembers.length > 0
         ? ["Other active teammates:", ...otherMembers.map((m) => `  - ${m.name} (@${m.agent}): ${m.status}`), ""]
@@ -685,6 +880,7 @@ export namespace Team {
       "Team tools available to you:",
       "- team_message: send a message to the lead or another teammate",
       "- team_broadcast: send a message to all teammates",
+      "- team_request_spawn: ask the lead to add another specialist when needed",
       "- team_tasks: view/add/complete tasks on the shared task list",
       "- team_claim: claim a pending task from the shared task list",
       "- team_notepad: read/write shared team knowledge",
@@ -694,6 +890,7 @@ export namespace Team {
       "Only the team lead can manage the team structure.",
       ...skillContext,
       ...planInstructions,
+      ...checkpointInstructions,
       ...peerList,
       ...taskSummary,
       ...budgetInfo,
@@ -779,6 +976,8 @@ export namespace Team {
         const member = team?.members.find((m) => m.name === input.name)
         if (member?.status === "shutdown_requested") {
           await transitionMemberStatus(input.teamName, input.name, "shutdown")
+        } else if (member?.status === "paused") {
+          log.info("teammate loop paused", { teamName: input.teamName, name: input.name })
         } else {
           await transitionMemberStatus(input.teamName, input.name, "ready")
         }
@@ -792,6 +991,13 @@ export namespace Team {
         await transitionMemberStatus(input.teamName, input.name, "error")
         await notifyLead(input.teamName, input.name, session.id, "errored", err.message)
       })
+
+    await TeamPolicy.memberSpawned({
+      teamName: input.teamName,
+      name: input.name,
+      agent: input.agent.name,
+      sessionID: session.id,
+    })
 
     return { sessionID: session.id, label }
   }
@@ -881,7 +1087,7 @@ export namespace Team {
     teamName: string
     memberName: string
     text: string
-  }): Promise<"restart" | "message"> {
+  }): Promise<"restart" | "resume" | "message"> {
     const { TeamMessaging } = await import("./messaging")
 
     const team = await get(input.teamName)
@@ -895,6 +1101,15 @@ export namespace Team {
       return "restart"
     }
 
+    if (member.status === "paused") {
+      await resume({
+        teamName: input.teamName,
+        memberName: input.memberName,
+        redirect: input.text,
+      })
+      return "resume"
+    }
+
     await TeamMessaging.send({
       teamName: input.teamName,
       from: "lead",
@@ -902,6 +1117,11 @@ export namespace Team {
       text: input.text,
     })
     return "message"
+  }
+
+  export async function steerAll(input: { teamName: string; text: string }) {
+    const { TeamMessaging } = await import("./messaging")
+    await TeamMessaging.broadcast({ teamName: input.teamName, from: "lead", text: input.text })
   }
 
   /**
@@ -985,12 +1205,7 @@ export namespace Team {
     })
   }
 
-  /**
-   * Cancel a single teammate's prompt loop by calling SessionPrompt.cancel.
-   * This mirrors how the Task tool propagates abort to subagents (task.ts:121-125).
-   * Returns true if the member was found and cancelled.
-   */
-  export async function cancelMember(teamName: string, memberName: string): Promise<boolean> {
+  async function interrupt(teamName: string, memberName: string, keep: boolean): Promise<boolean> {
     const { SessionPrompt } = await import("../session/prompt")
     const { SessionStatus } = await import("../session/status")
     const { SessionID } = await import("../session/schema")
@@ -1000,10 +1215,6 @@ export namespace Team {
 
     const member = team.members.find((m) => m.name === memberName)
     if (!member) return false
-    // Allow cancel for busy members and shutdown_requested members
-    // (shutdown sets shutdown_requested before calling cancelMember,
-    // so the member is no longer "busy" by the time we get here)
-    if (member.status !== "busy" && member.status !== "shutdown_requested") return false
     if (TERMINAL_EXECUTION_STATES.has(member.execution_status ?? "idle")) return false
 
     log.info("cancelling member", { teamName, memberName, sessionID: member.sessionID })
@@ -1018,7 +1229,6 @@ export namespace Team {
       const current = next?.members.find((m) => m.name === memberName)
       if (!current) break
       if (TERMINAL_EXECUTION_STATES.has(current.execution_status ?? "idle")) break
-      if (current.status !== "busy" && current.status !== "shutdown_requested") break
     }
 
     const next = await get(teamName)
@@ -1031,10 +1241,116 @@ export namespace Team {
 
     await transitionExecutionStatus(teamName, memberName, "cancelled", { force: true })
     await transitionExecutionStatus(teamName, memberName, "idle", { force: true })
-    if (current.status === "busy") {
+    if (!keep && current.status === "busy") {
       await transitionMemberStatus(teamName, memberName, "ready", { force: true })
     }
     return true
+  }
+
+  export async function pause(input: { teamName: string; memberName: string; reason?: string }): Promise<void> {
+    const team = await get(input.teamName)
+    if (!team) throw new Error(`Team "${input.teamName}" not found`)
+
+    const member = team.members.find((m) => m.name === input.memberName)
+    if (!member) throw new Error(`Teammate "${input.memberName}" not found`)
+    if (member.status === "paused") return
+    if (member.status === "shutdown" || member.status === "shutdown_requested") {
+      throw new Error(`Teammate "${input.memberName}" cannot be paused from status ${member.status}.`)
+    }
+
+    await transitionMemberStatus(input.teamName, input.memberName, "paused")
+    if (member.status === "busy") {
+      await interrupt(input.teamName, input.memberName, true)
+    }
+  }
+
+  export async function resume(input: { teamName: string; memberName: string; redirect?: string }): Promise<void> {
+    const { TeamMessaging } = await import("./messaging")
+
+    const team = await get(input.teamName)
+    if (!team) throw new Error(`Team "${input.teamName}" not found`)
+
+    const member = team.members.find((m) => m.name === input.memberName)
+    if (!member) throw new Error(`Teammate "${input.memberName}" not found`)
+    if (member.status !== "paused") {
+      throw new Error(`Teammate "${input.memberName}" is ${member.status} — only paused teammates can be resumed.`)
+    }
+
+    await transitionMemberStatus(input.teamName, input.memberName, "busy")
+    await TeamMessaging.recoverInbox(input.teamName, input.memberName, member.sessionID)
+    await TeamMessaging.send({
+      teamName: input.teamName,
+      from: "lead",
+      to: input.memberName,
+      text: input.redirect ?? "Resume work, review queued team messages, and continue from your latest checkpoint.",
+    })
+  }
+
+  export async function pauseAll(teamName: string, reason?: string) {
+    const team = await get(teamName)
+    if (!team) return
+    for (const member of team.members) {
+      if (member.status === "shutdown" || member.status === "shutdown_requested") continue
+      await pause({ teamName, memberName: member.name, reason })
+    }
+  }
+
+  export async function forceShutdownAll(teamName: string, reason?: string) {
+    const team = await get(teamName)
+    if (!team) return
+    for (const member of team.members) {
+      if (member.status === "shutdown") continue
+      await transitionMemberStatus(teamName, member.name, "shutdown_requested", { force: true })
+      if (member.status === "busy") {
+        await interrupt(teamName, member.name, true)
+      }
+      await transitionMemberStatus(teamName, member.name, "shutdown", { force: true })
+    }
+  }
+
+  export function checkpoints() {
+    return Bus.subscribe(MessageV2.Event.PartUpdated, async (event) => {
+      const part = event.properties.part
+      if (part.type !== "tool") return
+      if (part.state.status !== "completed") return
+      if (checkpoint.has(part.id)) return
+      checkpoint.add(part.id)
+
+      const info = await findBySession(part.sessionID)
+      if (!info || info.role !== "member" || !info.memberName) return
+      const member = info.team.members.find((item) => item.name === info.memberName)
+      if (!member) return
+      const mode = member.checkpoint ?? "none"
+      if (!checkpointMatch(mode, part.tool)) return
+      if (member.status !== "busy") return
+
+      await pause({ teamName: info.team.name, memberName: info.memberName })
+      const { TeamMessaging } = await import("./messaging")
+      await TeamMessaging.send({
+        teamName: info.team.name,
+        from: "system",
+        to: "lead",
+        text: `Checkpoint reached: "${info.memberName}" paused after tool "${part.tool}". Review their work and use resume to continue or redirect them.`,
+      }).catch(() => {})
+    })
+  }
+
+  /**
+   * Cancel a single teammate's prompt loop by calling SessionPrompt.cancel.
+   * This mirrors how the Task tool propagates abort to subagents (task.ts:121-125).
+   * Returns true if the member was found and cancelled.
+   */
+  export async function cancelMember(teamName: string, memberName: string): Promise<boolean> {
+    const team = await get(teamName)
+    if (!team) return false
+
+    const member = team.members.find((m) => m.name === memberName)
+    if (!member) return false
+    // Allow cancel for busy members and shutdown_requested members
+    // (shutdown sets shutdown_requested before calling cancelMember,
+    // so the member is no longer "busy" by the time we get here)
+    if (member.status !== "busy" && member.status !== "shutdown_requested") return false
+    return interrupt(teamName, memberName, false)
   }
 
   /**
@@ -1177,6 +1493,7 @@ export namespace TeamTasks {
    */
   export async function claim(teamName: string, taskId: string, memberName: string): Promise<boolean> {
     let claimed = false
+    let content = ""
     try {
       await Storage.update<TeamTask[]>(tasksKey(teamName), (tasks) => {
         const task = tasks.find((t) => t.id === taskId)
@@ -1194,13 +1511,17 @@ export namespace TeamTasks {
 
         task.status = "in_progress"
         task.assignee = memberName
+        content = task.content
         claimed = true
       })
     } catch {
       return false
     }
 
-    if (claimed) await Bus.publish(TeamEvent.TaskClaimed, { teamName, taskId, memberName })
+    if (claimed) {
+      await Bus.publish(TeamEvent.TaskClaimed, { teamName, taskId, memberName })
+      await TeamPolicy.taskClaimed({ teamName, taskId, taskContent: content, claimedBy: memberName })
+    }
     return claimed
   }
 

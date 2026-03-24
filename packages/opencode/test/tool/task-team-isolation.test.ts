@@ -16,6 +16,7 @@ import {
   TEAM_TOOL_IDS,
   TeamCreateTool,
   TeamSpawnTool,
+  TeamRequestSpawnTool,
   TeamMessageTool,
   TeamBroadcastTool,
   TeamTasksTool,
@@ -33,6 +34,7 @@ import { TeamNotepadTool } from "../../src/tool/team-notepad"
 const ALL_TEAM_TOOL_IDS = [
   TeamCreateTool.id,
   TeamSpawnTool.id,
+  TeamRequestSpawnTool.id,
   TeamMessageTool.id,
   TeamBroadcastTool.id,
   TeamTasksTool.id,

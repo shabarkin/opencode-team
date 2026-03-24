@@ -3,6 +3,7 @@ import { Bus } from "../bus"
 import { Session } from "../session"
 import { Team, TeamEvent } from "./index"
 import { TeamMessaging } from "./messaging"
+import { TeamPolicy } from "./policy"
 
 const log = Log.create({ service: "team.files" })
 
@@ -85,8 +86,22 @@ export function initFileTracking(): () => void {
           members: [...members, editor],
         })
 
+        const action = await TeamPolicy.conflictDetected({
+          teamName,
+          file: file.file,
+          editors: [...members, editor],
+        })
+        if (action.action === "ignore") continue
+
         // Notify both teammates and the lead
-        const warning = `[System]: File conflict — ${[...members, editor].join(", ")} edited ${file.file} within ${Math.round(CONFLICT_WINDOW / 60000)} minutes. Coordinate to avoid overwriting each other's changes.`
+        const warning = `[System]: File conflict — ${[...members, editor].join(", ")} edited ${file.file} within ${Math.round(CONFLICT_WINDOW / 60000)} minutes. ${action.action === "block" ? "Work has been paused until the lead resolves the conflict." : "Coordinate to avoid overwriting each other's changes."}`
+
+        if (action.action === "block") {
+          for (const name of [...members, editor]) {
+            if (skip.has(name)) continue
+            await Team.pause({ teamName, memberName: name }).catch(() => {})
+          }
+        }
 
         for (const member of members) {
           if (skip.has(member)) continue

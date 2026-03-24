@@ -208,4 +208,78 @@ describe("team routes", () => {
       },
     })
   })
+
+  test("pause, resume, and steer-all routes are lead-only", async () => {
+    process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const lead = (await Session.create({})).id
+        const member = (await Session.create({ parentID: lead })).id
+        await Team.create({ name: "pause-team", leadSessionID: lead })
+        await Team.addMember("pause-team", {
+          name: "worker-a",
+          sessionID: member,
+          agent: "general",
+          status: "ready",
+          checkpoint: "none",
+          planApproval: "none",
+        })
+
+        const pause = spyOn(Team, "pause").mockResolvedValue(undefined)
+        const resume = spyOn(Team, "resume").mockResolvedValue(undefined)
+        const steerAll = spyOn(Team, "steerAll").mockResolvedValue(undefined)
+        const app = TeamRoutes()
+
+        const denied = await app.request("/pause-team/pause", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": member,
+          },
+          body: JSON.stringify({ member: "worker-a" }),
+        })
+        expect(denied.status).toBe(403)
+
+        const paused = await app.request("/pause-team/pause", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": lead,
+          },
+          body: JSON.stringify({ member: "worker-a" }),
+        })
+        expect(paused.status).toBe(200)
+        expect(pause).toHaveBeenCalledWith({ teamName: "pause-team", memberName: "worker-a" })
+
+        const resumed = await app.request("/pause-team/resume", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": lead,
+          },
+          body: JSON.stringify({ member: "worker-a", redirect: "continue" }),
+        })
+        expect(resumed.status).toBe(200)
+        expect(resume).toHaveBeenCalledWith({ teamName: "pause-team", memberName: "worker-a", redirect: "continue" })
+
+        const broadcast = await app.request("/pause-team/steer-all", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": lead,
+          },
+          body: JSON.stringify({ text: "regroup" }),
+        })
+        expect(broadcast.status).toBe(200)
+        expect(steerAll).toHaveBeenCalledWith({ teamName: "pause-team", text: "regroup" })
+
+        pause.mockRestore()
+        resume.mockRestore()
+        steerAll.mockRestore()
+      },
+    })
+  })
 })

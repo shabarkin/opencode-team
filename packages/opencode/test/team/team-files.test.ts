@@ -9,6 +9,7 @@ import { Env } from "../../src/env"
 import { Log } from "../../src/util/log"
 import { activeConflicts, initFileTracking } from "../../src/team/files"
 import { TeamMessaging } from "../../src/team/messaging"
+import { Plugin } from "../../src/plugin"
 
 Log.init({ print: false })
 
@@ -112,6 +113,42 @@ describe("team file tracking", () => {
         await Team.setMemberStatus("files-d", "d1", "shutdown")
         await Team.setMemberStatus("files-d", "d2", "shutdown")
         await Team.cleanup("files-d")
+      },
+    })
+  })
+
+  test("conflict policy can block editors by pausing them", async () => {
+    await Instance.provide({
+      directory: root,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const stop = initFileTracking()
+        const trigger = spyOn(Plugin, "trigger").mockImplementation(async (name, _input, output) => {
+          if (name === "team.conflict.detected") {
+            ;(output as { action: "warn" | "block" | "ignore" }).action = "block"
+          }
+          return output as any
+        })
+        const pause = spyOn(Team, "pause").mockResolvedValue(undefined)
+
+        await Team.create({ name: "files-e", leadSessionID: "ses_lead_files_e" })
+        await Team.addMember("files-e", { name: "e1", sessionID: "ses_e1", agent: "general", status: "busy" })
+        await Team.addMember("files-e", { name: "e2", sessionID: "ses_e2", agent: "general", status: "busy" })
+
+        const diff = [{ file: "/tmp/shared-e.ts", before: "", after: "x", additions: 1, deletions: 0 }]
+        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_e1"), diff })
+        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_e2"), diff })
+
+        expect(pause).toHaveBeenCalledTimes(2)
+
+        trigger.mockRestore()
+        pause.mockRestore()
+        stop()
+        await Team.setMemberStatus("files-e", "e1", "shutdown")
+        await Team.setMemberStatus("files-e", "e2", "shutdown")
+        await Team.cleanup("files-e")
       },
     })
   })

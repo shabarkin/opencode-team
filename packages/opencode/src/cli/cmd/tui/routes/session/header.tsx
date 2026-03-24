@@ -89,7 +89,12 @@ export function Header() {
   const dimensions = useTerminalDimensions()
   const narrow = createMemo(() => dimensions().width < 80)
   const team = createMemo(() => sync.data.team[route.sessionID])
-  const steer = createMemo(() => team()?.role === "member")
+  const steer = createMemo(() => {
+    const info = team()
+    if (!info) return false
+    if (info.role === "member") return true
+    return info.members.length > 0
+  })
 
   return (
     <box flexShrink={0}>
@@ -181,10 +186,26 @@ export function Header() {
             </box>
             <Show when={sync.data.team[route.sessionID]}>
               {(teamData) => (
-                <text fg={theme.textMuted} wrapMode="none" flexShrink={0}>
-                  [{teamData().teamName} | {teamData().members.length} members |{" "}
-                  {teamData().members.filter((m) => m.status === "busy").length} busy]
-                </text>
+                <box gap={1} flexDirection="row" alignItems="center">
+                  <text fg={theme.textMuted} wrapMode="none" flexShrink={0}>
+                    [{teamData().teamName} | {teamData().members.length} members |{" "}
+                    {teamData().members.filter((m) => m.status === "busy").length} busy
+                    {teamData().pendingSpawnRequests?.length
+                      ? ` | ${teamData().pendingSpawnRequests.length} spawn request${teamData().pendingSpawnRequests.length === 1 ? "" : "s"}`
+                      : ""}
+                    ]
+                  </text>
+                  <Show when={steer()}>
+                    <box
+                      onMouseOver={() => setHover("steer")}
+                      onMouseOut={() => setHover(null)}
+                      onMouseUp={() => dialog.replace(() => <DialogTeamSteer sessionID={route.sessionID} />)}
+                      backgroundColor={hover() === "steer" ? theme.backgroundElement : theme.backgroundPanel}
+                    >
+                      <text fg={theme.text}>Steer</text>
+                    </box>
+                  </Show>
+                </box>
               )}
             </Show>
           </Match>

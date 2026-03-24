@@ -36,6 +36,7 @@ export const TeamStatusTool = Tool.define("team_status", {
           `exec=${m.execution_status ?? "idle"}`,
           m.model ?? "",
           m.planApproval && m.planApproval !== "none" ? `plan=${m.planApproval}` : "",
+          m.checkpoint && m.checkpoint !== "none" ? `checkpoint=${m.checkpoint}` : "",
           unread.length > 0 ? `${unread.length} unread` : "",
           `${mins}m`,
         ]
@@ -72,6 +73,15 @@ export const TeamStatusTool = Tool.define("team_status", {
       `Tasks: ${tasks.length} total — ${pending} pending, ${progress} in progress, ${completed} completed, ${blocked} blocked${cancelled ? `, ${cancelled} cancelled` : ""}`,
     ]
 
+    if (team.pending_spawn_requests?.length) {
+      sections.push("", `Pending spawn requests (${team.pending_spawn_requests.length}):`)
+      for (const request of team.pending_spawn_requests) {
+        sections.push(
+          `  [${request.id}] ${request.requested_by} → ${request.agent}${request.name ? ` as ${request.name}` : ""} — ${request.rationale}`,
+        )
+      }
+    }
+
     if (tasks.length > 0) {
       sections.push("")
       for (const t of tasks) {
@@ -92,6 +102,7 @@ export const TeamStatusTool = Tool.define("team_status", {
         teamName: team.name,
         memberCount: team.members.length,
         taskCount: tasks.length,
+        pendingSpawnRequestCount: team.pending_spawn_requests?.length ?? 0,
       },
     }
   },
@@ -101,6 +112,8 @@ function icon(status: string): string {
   switch (status) {
     case "busy":
       return "*"
+    case "paused":
+      return "||"
     case "ready":
       return "o"
     case "shutdown_requested":

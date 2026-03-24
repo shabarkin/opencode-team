@@ -86,7 +86,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             name: string
             sessionID: string
             agent: string
-            status: "ready" | "busy" | "shutdown_requested" | "shutdown" | "error"
+            status: "ready" | "busy" | "paused" | "shutdown_requested" | "shutdown" | "error"
             execution_status:
               | "idle"
               | "starting"
@@ -100,6 +100,16 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               | "timed_out"
             model?: string
             planApproval?: "none" | "pending" | "approved" | "rejected"
+            checkpoint?: "none" | "after_each_write" | "after_each_tool"
+          }>
+          pendingSpawnRequests: Array<{
+            id: string
+            requested_by: string
+            agent: string
+            rationale: string
+            name?: string
+            prompt?: string
+            created: number
           }>
           tasks: Array<{
             id: string
@@ -153,6 +163,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         memberName: data.memberName,
         delegate: data.team.delegate,
         members: data.team.members ?? [],
+        pendingSpawnRequests: data.team.pending_spawn_requests ?? [],
         tasks: data.tasks ?? [],
       }
     }

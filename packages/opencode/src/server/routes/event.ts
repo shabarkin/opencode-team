@@ -57,6 +57,18 @@ export function redact(event: { type: string; properties: Record<string, unknown
           approved: event.properties.approved,
         },
       }
+    case "team.spawn.requested": {
+      const request = event.properties.request as { id?: string; requested_by?: string; agent?: string } | undefined
+      return {
+        type: event.type,
+        properties: {
+          teamName: event.properties.teamName,
+          requestID: request?.id,
+          requestedBy: request?.requested_by,
+          agent: request?.agent,
+        },
+      }
+    }
     case "team.cleaned":
       return {
         type: event.type,

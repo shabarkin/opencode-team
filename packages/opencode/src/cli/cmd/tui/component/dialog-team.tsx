@@ -12,6 +12,8 @@ function statusIcon(status: string): string {
   switch (status) {
     case "busy":
       return "*"
+    case "paused":
+      return "||"
     case "ready":
       return "o"
     case "shutdown_requested":
@@ -37,6 +39,8 @@ function statusColor(status: string, theme: any): string {
   switch (status) {
     case "busy":
       return theme.primary
+    case "paused":
+      return theme.warning
     case "ready":
       return theme.textMuted
     case "shutdown_requested":
@@ -86,6 +90,7 @@ export function DialogTeam() {
           memberName: data.memberName,
           delegate: data.team.delegate,
           members: data.team.members ?? [],
+          pendingSpawnRequests: data.team.pending_spawn_requests ?? [],
           tasks: data.tasks ?? [],
         })
       })
@@ -119,7 +124,15 @@ export function DialogTeam() {
       disabled: t.status === "completed" || t.status === "cancelled",
     }))
 
-    return [...memberOptions, ...taskOptions]
+    const spawnOptions: DialogSelectOption<string>[] = (info.pendingSpawnRequests ?? []).map((request) => ({
+      title: `${request.requested_by} → ${request.agent}${request.name ? ` as ${request.name}` : ""}`,
+      value: `request:${request.id}`,
+      category: "Pending Spawn Requests",
+      footer: request.rationale,
+      gutter: <text fg={theme.warning}>?</text>,
+    }))
+
+    return [...memberOptions, ...taskOptions, ...spawnOptions]
   })
 
   const handleSelect = (option: DialogSelectOption<string>) => {
