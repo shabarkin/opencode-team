@@ -1,12 +1,14 @@
 import z from "zod"
 import { Tool } from "./tool"
-import { Team, TeamTasks, WRITE_TOOLS, type TeamTask } from "../team"
+import { Team, TeamTasks, TeamNameSchema, MemberNameSchema, addDelegateRules, type TeamTask } from "../team"
 import { TeamMessaging } from "../team/messaging"
 import { Session } from "../session"
 import { Agent } from "../agent/agent"
 import { Provider } from "../provider/provider"
 import { Bus } from "../bus"
 import { TeamEvent } from "../team/events"
+import { TeamStatusTool } from "./team-status"
+import { TeamNotepadTool } from "./team-notepad"
 
 /**
  * Create a new agent team. Only the lead session should call this.
@@ -17,7 +19,7 @@ export const TeamCreateTool = Tool.define("team_create", {
     "You become the team lead. After creating a team, use team_spawn to add teammates, " +
     "and team_tasks to create a shared task list.",
   parameters: z.object({
-    name: z.string().describe("Team name — lowercase, hyphens allowed. E.g. 'auth-review', 'feature-impl'"),
+    name: TeamNameSchema.describe("Team name — lowercase, hyphens allowed. E.g. 'auth-review', 'feature-impl'"),
     tasks: z
       .array(
         z.object({
@@ -73,14 +75,9 @@ export const TeamCreateTool = Tool.define("team_create", {
     // Delegate mode: restrict the lead to coordination-only tools
     if (params.delegate) {
       const session = await Session.get(ctx.sessionID)
-      const delegateDenyRules = WRITE_TOOLS.map((tool) => ({
-        permission: tool,
-        pattern: "*",
-        action: "deny" as const,
-      }))
       await Session.setPermission({
         sessionID: ctx.sessionID,
-        permission: [...(session.permission ?? []), ...delegateDenyRules],
+        permission: addDelegateRules(session.permission ?? []),
       })
     }
 
@@ -90,15 +87,21 @@ export const TeamCreateTool = Tool.define("team_create", {
         `Team "${params.name}" created. You are the lead.`,
         params.delegate ? "DELEGATE MODE: You are restricted to coordination tools only (no write/edit/bash)." : "",
         "",
-        "Next steps:",
-        "- Use team_spawn to add teammates",
-        "- Use team_tasks to manage the shared task list",
-        "- Use team_message to communicate with teammates",
+        "Quick reference:",
+        "  team_spawn        — Add a teammate (set agent, model, prompt, timeout)",
+        "  team_status       — Full team snapshot (members, tasks, costs)",
+        "  team_message      — Direct message a teammate (to: 'name')",
+        "  team_broadcast    — Message all teammates",
+        "  team_tasks        — View/add/complete shared tasks",
+        "  team_claim        — Claim a pending task",
+        "  team_notepad      — Read/write shared team knowledge",
+        "  team_health       — Diagnose stuck members, blocked tasks",
+        "  team_restart      — Re-engage an idle/errored teammate",
+        "  team_approve_plan — Approve a teammate's plan (if plan mode)",
+        "  team_shutdown     — Gracefully stop a teammate",
+        "  team_cleanup      — Remove team resources (after all shutdown)",
         "",
-        "Lifecycle:",
-        "- When teammates finish, use team_shutdown to shut them down",
-        "- Once all teammates are shut down, use team_cleanup to remove team resources",
-        "- If all teammates shut down on their own (idle→shutdown), cleanup happens automatically",
+        "Lifecycle: spawn → work → shutdown → cleanup (auto if all shutdown)",
         params.tasks?.length ? `\nInitial tasks: ${params.tasks.length}` : "",
       ]
         .filter(Boolean)
@@ -120,7 +123,7 @@ export const TeamSpawnTool = Tool.define("team_spawn", {
     "SUBAGENT RELAY: If subagents are used, they CANNOT communicate with the team directly; " +
     "teammates are responsible for relaying any relevant findings.",
   parameters: z.object({
-    name: z.string().describe("Unique name for this teammate, e.g. 'security-reviewer', 'frontend-impl'"),
+    name: MemberNameSchema.describe("Unique name for this teammate, e.g. 'security-reviewer', 'frontend-impl'"),
     agent: z.string().optional().describe("Agent type to use (e.g. 'explore', 'general'). Defaults to 'general'."),
     model: z
       .string()
@@ -132,6 +135,10 @@ export const TeamSpawnTool = Tool.define("team_spawn", {
       ),
     prompt: z.string().describe("Initial instructions for the teammate — what they should work on"),
     claim_task: z.string().optional().describe("Task ID to auto-claim for this teammate"),
+    timeout: z
+      .number()
+      .optional()
+      .describe("Maximum execution time in minutes. Teammate is auto-cancelled when exceeded. Default: no limit."),
     require_plan_approval: z
       .boolean()
       .optional()
@@ -228,6 +235,7 @@ export const TeamSpawnTool = Tool.define("team_spawn", {
       prompt: params.prompt,
       claimTask: params.claim_task,
       planApproval: !!params.require_plan_approval,
+      timeout: params.timeout,
     })
 
     return {
@@ -461,7 +469,7 @@ export const TeamApprovePlanTool = Tool.define("team_approve_plan", {
     "require_plan_approval=true, they start in read-only mode and must submit a plan. " +
     "Use this tool to approve (unlocks write tools) or reject (teammate revises their plan).",
   parameters: z.object({
-    name: z.string().describe("Name of the teammate whose plan to review"),
+    name: MemberNameSchema.describe("Name of the teammate whose plan to review"),
     approved: z.boolean().describe("true to approve the plan and unlock write access, false to reject"),
     feedback: z.string().optional().describe("Feedback for the teammate — required on rejection, optional on approval"),
   }),
@@ -558,7 +566,7 @@ export const TeamShutdownTool = Tool.define("team_shutdown", {
     "the teammate will be transitioned to shutdown after processing the message. " +
     "Only the team lead should use this.",
   parameters: z.object({
-    name: z.string().describe("Name of the teammate to shut down"),
+    name: MemberNameSchema.describe("Name of the teammate to shut down"),
     reason: z.string().optional().describe("Reason for the shutdown request"),
   }),
   async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
@@ -637,7 +645,7 @@ export const TeamCleanupTool = Tool.define("team_cleanup", {
     "Clean up the team by removing all team resources (config, task list). " +
     "All teammates must be shut down first. Only the lead should call this.",
   parameters: z.object({
-    name: z.string().describe("Team name to clean up"),
+    name: TeamNameSchema.describe("Team name to clean up"),
   }),
   async execute(params, ctx) {
     // Authorization: only the lead of this specific team can clean it up
@@ -674,6 +682,144 @@ export const TeamCleanupTool = Tool.define("team_cleanup", {
   },
 })
 
+/**
+ * Health check — diagnose stuck teammates, blocked tasks, and undelivered messages.
+ */
+export const TeamHealthTool = Tool.define("team_health", {
+  description:
+    "Diagnose team health issues: stuck teammates (busy too long), blocked tasks " +
+    "with unresolvable dependencies, and undelivered inbox messages. Use this when " +
+    "the team seems stuck or you suspect something is wrong.",
+  parameters: z.object({}),
+  async execute(_params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
+    const info = await Team.findBySession(ctx.sessionID)
+    if (!info) {
+      return { title: "Error", output: "You are not part of any team.", metadata: {} }
+    }
+
+    const team = await Team.get(info.team.name)
+    if (!team) {
+      return { title: "Error", output: `Team "${info.team.name}" not found.`, metadata: {} }
+    }
+
+    const { Inbox } = await import("../team/inbox")
+    const { activeConflicts } = await import("../team/files")
+    const tasks = await TeamTasks.list(team.name)
+    const now = Date.now()
+    const issues: string[] = []
+
+    // Check for stuck teammates (busy > 10 minutes with no status change)
+    for (const m of team.members) {
+      if (m.status === "busy") {
+        const elapsed = Math.round((now - team.created) / 60000)
+        if (elapsed > 10) {
+          issues.push(`STUCK: "${m.name}" has been busy for ${elapsed} minutes`)
+        }
+      }
+      if (m.status === "error") {
+        issues.push(`ERROR: "${m.name}" is in error state — consider restarting or shutting down`)
+      }
+    }
+
+    // Check for blocked tasks with no path to unblock
+    const blocked = tasks.filter((t) => t.status === "blocked")
+    for (const t of blocked) {
+      const deps = t.depends_on ?? []
+      const unresolvable = deps.filter((dep) => {
+        const d = tasks.find((x) => x.id === dep)
+        return !d || d.status === "cancelled"
+      })
+      if (unresolvable.length > 0) {
+        issues.push(`BLOCKED: Task "${t.id}" depends on missing/cancelled tasks: ${unresolvable.join(", ")}`)
+      }
+    }
+
+    // Check for undelivered messages
+    for (const m of team.members) {
+      const unread = await Inbox.unread(team.name, m.name).catch(() => [])
+      if (unread.length > 5) {
+        issues.push(`BACKLOG: "${m.name}" has ${unread.length} unread messages`)
+      }
+    }
+    const leadUnread = await Inbox.unread(team.name, "lead").catch(() => [])
+    if (leadUnread.length > 5) {
+      issues.push(`BACKLOG: Lead has ${leadUnread.length} unread messages`)
+    }
+
+    // Check for file conflicts
+    const conflicts = activeConflicts()
+    for (const c of conflicts) {
+      issues.push(`CONFLICT: ${c.file} edited by: ${c.members.join(", ")}`)
+    }
+
+    if (issues.length === 0) {
+      return { title: "Team health", output: "No issues detected. Team is healthy.", metadata: {} }
+    }
+
+    return {
+      title: `Team health: ${issues.length} issues`,
+      output: issues.join("\n"),
+      metadata: { issues: issues.length },
+    }
+  },
+})
+
+/**
+ * Restart an idle/errored teammate by re-engaging their prompt loop.
+ */
+export const TeamRestartTool = Tool.define("team_restart", {
+  description:
+    "Restart an idle or errored teammate by sending them a new message and waking " +
+    "their prompt loop. Cheaper than shutdown + re-spawn because it reuses the existing session.",
+  parameters: z.object({
+    name: z.string().describe("Name of the teammate to restart"),
+    message: z.string().describe("Instructions for the restarted teammate — what they should do next"),
+  }),
+  async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
+    const info = await Team.findBySession(ctx.sessionID)
+    if (!info || info.role !== "lead") {
+      return { title: "Error", output: "Only the team lead can restart teammates.", metadata: {} }
+    }
+
+    const team = await Team.get(info.team.name)
+    if (!team) {
+      return { title: "Error", output: `Team "${info.team.name}" not found.`, metadata: {} }
+    }
+
+    const member = team.members.find((m) => m.name === params.name)
+    if (!member) {
+      return { title: "Error", output: `Teammate "${params.name}" not found.`, metadata: {} }
+    }
+
+    if (member.status !== "ready" && member.status !== "error") {
+      return {
+        title: "Error",
+        output: `Teammate "${params.name}" is ${member.status} — can only restart ready or errored teammates.`,
+        metadata: {},
+      }
+    }
+
+    // Reset error state if needed
+    if (member.status === "error") {
+      await Team.transitionMemberStatus(info.team.name, params.name, "ready", { force: true })
+    }
+
+    // Send the message — autoWake in messaging will start the loop
+    await TeamMessaging.send({
+      teamName: info.team.name,
+      from: "lead",
+      to: params.name,
+      text: params.message,
+    })
+
+    return {
+      title: `Restarted: ${params.name}`,
+      output: `Sent new instructions to "${params.name}" and triggered auto-wake. They should begin processing shortly.`,
+      metadata: {},
+    }
+  },
+})
+
 export const TeamTools = [
   TeamCreateTool,
   TeamSpawnTool,
@@ -684,4 +830,8 @@ export const TeamTools = [
   TeamApprovePlanTool,
   TeamShutdownTool,
   TeamCleanupTool,
+  TeamStatusTool,
+  TeamNotepadTool,
+  TeamHealthTool,
+  TeamRestartTool,
 ]

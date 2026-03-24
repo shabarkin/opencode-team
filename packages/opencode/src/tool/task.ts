@@ -12,6 +12,18 @@ import { defer } from "@/util/defer"
 import { Config } from "../config/config"
 import { Permission } from "@/permission"
 
+const TEAM_TOOLS = [
+  "team_create",
+  "team_spawn",
+  "team_message",
+  "team_broadcast",
+  "team_tasks",
+  "team_claim",
+  "team_approve_plan",
+  "team_shutdown",
+  "team_cleanup",
+] as const
+
 const parameters = z.object({
   description: z.string().describe("A short (3-5 words) description of the task"),
   prompt: z.string().describe("The task for the agent to perform"),
@@ -85,6 +97,11 @@ export const TaskTool = Tool.define("task", async (ctx) => {
               pattern: "*",
               action: "deny",
             },
+            ...TEAM_TOOLS.map((t) => ({
+              permission: t,
+              pattern: "*",
+              action: "deny" as const,
+            })),
             ...(hasTaskPermission
               ? []
               : [
@@ -138,6 +155,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
         tools: {
           todowrite: false,
           todoread: false,
+          ...Object.fromEntries(TEAM_TOOLS.map((t) => [t, false])),
           ...(hasTaskPermission ? {} : { task: false }),
           ...Object.fromEntries((config.experimental?.primary_tools ?? []).map((t) => [t, false])),
         },

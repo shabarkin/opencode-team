@@ -23,6 +23,9 @@ const SafeName = z
   .string()
   .regex(/^[a-z0-9][a-z0-9-]{0,63}$/, "Must be lowercase alphanumeric with hyphens, 1-64 chars")
 
+export const TeamNameSchema = SafeName
+export const MemberNameSchema = SafeName
+
 export const TeamMemberSchema = z.object({
   name: SafeName,
   sessionID: z.string(),
@@ -44,6 +47,16 @@ export const TeamInfoSchema = z.object({
   delegate: z.boolean().optional(),
 })
 export type TeamInfo = z.infer<typeof TeamInfoSchema>
+
+export const TeamMemberPublicSchema = TeamMemberSchema.omit({ prompt: true, sessionID: true })
+export const TeamInfoPublicSchema = TeamInfoSchema.omit({ leadSessionID: true, members: true }).extend({
+  members: z.array(TeamMemberPublicSchema),
+})
+
+export const TeamMemberSessionSchema = TeamMemberSchema.omit({ prompt: true })
+export const TeamInfoSessionSchema = TeamInfoSchema.omit({ leadSessionID: true, members: true }).extend({
+  members: z.array(TeamMemberSessionSchema),
+})
 
 export const TeamTaskSchema = z.object({
   id: z.string(),
@@ -158,6 +171,34 @@ export namespace TeamEvent {
       teamName: z.string(),
       leadSessionID: z.string(),
       delegate: z.boolean(),
+    }),
+  )
+
+  export const MemberTimeout = BusEvent.define(
+    "team.member.timeout",
+    z.object({
+      teamName: z.string(),
+      memberName: z.string(),
+      elapsed: z.number(),
+      limit: z.number(),
+    }),
+  )
+
+  export const FileConflict = BusEvent.define(
+    "team.file.conflict",
+    z.object({
+      teamName: z.string(),
+      filepath: z.string(),
+      members: z.array(z.string()),
+    }),
+  )
+
+  export const InboxPruned = BusEvent.define(
+    "team.inbox.pruned",
+    z.object({
+      teamName: z.string(),
+      agentName: z.string(),
+      removed: z.number(),
     }),
   )
 }

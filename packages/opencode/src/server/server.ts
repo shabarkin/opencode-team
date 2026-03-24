@@ -55,7 +55,7 @@ export namespace Server {
 
   export const createApp = (opts: { cors?: string[] }): Hono => {
     const app = new Hono()
-    return app
+    const result = app
       .onError((err, c) => {
         log.error("failed", {
           error: err,
@@ -245,7 +245,12 @@ export namespace Server {
       .route("/config", ConfigRoutes())
       .route("/experimental", ExperimentalRoutes())
       .route("/session", SessionRoutes())
-      .route("/team", TeamRoutes())
+
+    if (Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS) {
+      result.route("/team", TeamRoutes())
+    }
+
+    return result
       .route("/permission", PermissionRoutes())
       .route("/question", QuestionRoutes())
       .route("/provider", ProviderRoutes())

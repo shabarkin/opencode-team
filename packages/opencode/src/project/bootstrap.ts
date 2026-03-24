@@ -48,6 +48,8 @@ export async function InstanceBootstrap() {
         .finally(() => {
           Team.autoCleanup()
         })
+      // File conflict detection
+      import("../team/files").then(({ initFileTracking }) => initFileTracking())
     })
   }
 }

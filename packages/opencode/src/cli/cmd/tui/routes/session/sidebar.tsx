@@ -106,6 +106,52 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
               <text fg={theme.textMuted}>{context()?.percentage ?? 0}% used</text>
               <text fg={theme.textMuted}>{cost()} spent</text>
             </box>
+            <Show when={sync.data.team[props.sessionID]}>
+              {(teamData) => (
+                <box>
+                  <text fg={theme.text}>
+                    <b>Team</b>{" "}
+                    <span style={{ fg: theme.textMuted }}>
+                      {teamData().teamName} ({teamData().role})
+                      {teamData().delegate ? " [delegate]" : ""}
+                    </span>
+                  </text>
+                  <For each={teamData().members}>
+                    {(m) => (
+                      <box flexDirection="row" gap={1}>
+                        <text
+                          flexShrink={0}
+                          style={{
+                            fg: (
+                              {
+                                busy: theme.warning,
+                                ready: theme.success,
+                                shutdown: theme.textMuted,
+                                shutdown_requested: theme.warning,
+                                error: theme.error,
+                              } as Record<string, typeof theme.success>
+                            )[m.status],
+                          }}
+                        >
+                          {m.status === "busy" ? "*" : m.status === "ready" ? "o" : m.status === "shutdown" ? "x" : m.status === "error" ? "E" : "!"}
+                        </text>
+                        <text fg={theme.text} wrapMode="word">
+                          {m.name}{" "}
+                          <span style={{ fg: theme.textMuted }}>
+                            @{m.agent} {m.execution_status !== "idle" ? `(${m.execution_status})` : ""}
+                          </span>
+                        </text>
+                      </box>
+                    )}
+                  </For>
+                  <Show when={teamData().tasks.length > 0}>
+                    <text fg={theme.textMuted}>
+                      Tasks: {teamData().tasks.filter((t) => t.status === "completed").length}/{teamData().tasks.length} done
+                    </text>
+                  </Show>
+                </box>
+              )}
+            </Show>
             <Show when={mcpEntries().length > 0}>
               <box>
                 <box

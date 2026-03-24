@@ -7,9 +7,12 @@ import { Lock } from "../util/lock"
 import { fn } from "../util/fn"
 import {
   TeamEvent,
+  TeamNameSchema,
+  MemberNameSchema,
   MemberStatus as MemberStatusSchema,
   ExecutionStatus,
   TeamInfoSchema,
+  TeamMemberSchema,
   TeamTaskSchema,
   type TeamInfo,
   type TeamMember,
@@ -20,8 +23,12 @@ import {
 
 export {
   TeamEvent,
+  TeamNameSchema,
+  MemberNameSchema,
   ExecutionStatus,
   TeamInfoSchema,
+  TeamInfoPublicSchema,
+  TeamInfoSessionSchema,
   TeamTaskSchema,
   type TeamInfo,
   type TeamMember,
@@ -30,8 +37,32 @@ export {
 
 /** Write tools that are denied during plan-approval or delegate mode */
 export const WRITE_TOOLS = ["bash", "write", "edit", "multiedit", "apply_patch"] as const
+export const DELEGATE_PATTERN = "*:delegate"
 
 const log = Log.create({ service: "team" })
+
+type Rule = {
+  permission: string
+  pattern: string
+  action: "deny" | "allow" | "ask"
+}
+
+export function addDelegateRules(rules: Rule[]) {
+  return [
+    ...rules,
+    ...WRITE_TOOLS.filter(
+      (permission) => !rules.some((rule) => rule.permission === permission && rule.pattern === DELEGATE_PATTERN),
+    ).map((permission) => ({
+      permission,
+      pattern: DELEGATE_PATTERN,
+      action: "deny" as const,
+    })),
+  ]
+}
+
+export function removeDelegateRules(rules: Rule[]) {
+  return rules.filter((rule) => !(rule.action === "deny" && rule.pattern === DELEGATE_PATTERN))
+}
 
 /** Storage key for a team's config */
 function configKey(name: string): string[] {
@@ -141,12 +172,9 @@ export namespace Team {
         const { Session } = await import("../session")
         const { SessionID } = await import("../session/schema")
         const session = await Session.get(SessionID.make(event.properties.leadSessionID))
-        const filtered = (session.permission ?? []).filter(
-          (rule) => !((WRITE_TOOLS as readonly string[]).includes(rule.permission) && rule.action === "deny"),
-        )
         await Session.setPermission({
           sessionID: SessionID.make(event.properties.leadSessionID),
-          permission: filtered,
+          permission: removeDelegateRules(session.permission ?? []),
         })
         log.info("restored lead session permissions", {
           teamName: event.properties.teamName,
@@ -166,7 +194,7 @@ export namespace Team {
    */
   export const create = fn(
     z.object({
-      name: z.string(),
+      name: TeamNameSchema,
       leadSessionID: z.string(),
       delegate: z.boolean().optional(),
     }),
@@ -229,19 +257,20 @@ export namespace Team {
    * Rejects duplicate names (case-insensitive), duplicate sessionIDs, and "lead" as a name.
    */
   export async function addMember(teamName: string, member: TeamMember): Promise<void> {
-    const lower = member.name.toLowerCase()
+    const next = TeamMemberSchema.parse(member)
+    const lower = next.name.toLowerCase()
     if (lower === "lead") throw new Error(`Name "lead" is reserved and cannot be used for a teammate.`)
 
     await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
       if (draft.members.some((m) => m.name.toLowerCase() === lower))
-        throw new Error(`Teammate "${member.name}" already exists in team "${teamName}" (case-insensitive)`)
-      if (draft.members.some((m) => m.sessionID === member.sessionID))
-        throw new Error(`Session "${member.sessionID}" is already registered in team "${teamName}"`)
-      draft.members.push(member)
+        throw new Error(`Teammate "${next.name}" already exists in team "${teamName}" (case-insensitive)`)
+      if (draft.members.some((m) => m.sessionID === next.sessionID))
+        throw new Error(`Session "${next.sessionID}" is already registered in team "${teamName}"`)
+      draft.members.push(next)
     })
 
-    log.info("member added", { teamName, member: member.name, agent: member.agent })
-    await Bus.publish(TeamEvent.MemberSpawned, { teamName, member })
+    log.info("member added", { teamName, member: next.name, agent: next.agent })
+    await Bus.publish(TeamEvent.MemberSpawned, { teamName, member: next })
   }
 
   export async function transitionMemberStatus(
@@ -400,6 +429,49 @@ export namespace Team {
   }
 
   /**
+   * Get cumulative token/cost data for the entire team (lead + all members).
+   */
+  export async function cost(teamName: string): Promise<{
+    total: { input: number; output: number; reasoning: number; cost: number }
+    perMember: Record<string, { input: number; output: number; reasoning: number; cost: number }>
+  }> {
+    const { Session } = await import("../session")
+    const { SessionID } = await import("../session/schema")
+
+    const team = await get(teamName)
+    if (!team) return { total: { input: 0, output: 0, reasoning: 0, cost: 0 }, perMember: {} }
+
+    const result: Record<string, { input: number; output: number; reasoning: number; cost: number }> = {}
+
+    async function sum(name: string, sessionID: string) {
+      const acc = { input: 0, output: 0, reasoning: 0, cost: 0 }
+      const msgs = await Session.messages({ sessionID: SessionID.make(sessionID) }).catch(() => [])
+      for (const m of msgs) {
+        if (m.info.role !== "assistant") continue
+        const a = m.info as { tokens: { input: number; output: number; reasoning: number }; cost: number }
+        acc.input += a.tokens.input
+        acc.output += a.tokens.output
+        acc.reasoning += a.tokens.reasoning
+        acc.cost += a.cost
+      }
+      result[name] = acc
+    }
+
+    await sum("lead", team.leadSessionID)
+    await Promise.all(team.members.map((m) => sum(m.name, m.sessionID)))
+
+    const total = { input: 0, output: 0, reasoning: 0, cost: 0 }
+    for (const v of Object.values(result)) {
+      total.input += v.input
+      total.output += v.output
+      total.reasoning += v.reasoning
+      total.cost += v.cost
+    }
+
+    return { total, perMember: result }
+  }
+
+  /**
    * Spawn a teammate — creates session, registers member, starts prompt loop.
    * On addMember failure, cleans up the orphaned session.
    */
@@ -412,6 +484,8 @@ export namespace Team {
     prompt: string
     claimTask?: string
     planApproval: boolean
+    timeout?: number
+    maxTokens?: number
   }): Promise<{ sessionID: string; label: string }> {
     const { Session } = await import("../session")
     const { SessionPrompt } = await import("../session/prompt")
@@ -498,6 +572,30 @@ export namespace Team {
         ]
       : []
 
+    // Gather team state for context injection
+    const { TeamNotepad } = await import("./notepad")
+    const notepadCtx = await TeamNotepad.context(input.teamName).catch(() => "")
+    const team = await get(input.teamName)
+    const tasks = await TeamTasks.list(input.teamName)
+
+    const otherMembers = team?.members.filter((m) => m.name !== input.name && m.status !== "shutdown") ?? []
+    const peerList = otherMembers.length > 0
+      ? ["Other active teammates:", ...otherMembers.map((m) => `  - ${m.name} (@${m.agent}): ${m.status}`), ""]
+      : []
+
+    const taskSummary = tasks.length > 0
+      ? ["Current task board:", ...tasks.map((t) => `  [${t.id}] ${t.content} — ${t.status}${t.assignee ? ` (${t.assignee})` : ""}`), ""]
+      : []
+
+    const budgetInfo = input.timeout || input.maxTokens
+      ? [
+          "Budget constraints:",
+          ...(input.timeout ? [`  - Time limit: ${input.timeout} minutes`] : []),
+          ...(input.maxTokens ? [`  - Token budget: ${input.maxTokens} tokens`] : []),
+          "",
+        ]
+      : []
+
     const context = [
       `You are "${input.name}", a teammate in team "${input.teamName}".`,
       `Your agent type is "${input.agent.name}", using model ${label}.`,
@@ -507,11 +605,17 @@ export namespace Team {
       "- team_broadcast: send a message to all teammates",
       "- team_tasks: view/add/complete tasks on the shared task list",
       "- team_claim: claim a pending task from the shared task list",
+      "- team_notepad: read/write shared team knowledge",
+      "- team_status: see full team state",
       "",
       "You do NOT have access to team_create, team_spawn, team_shutdown, or team_cleanup.",
       "Only the team lead can manage the team structure.",
       ...skillContext,
       ...planInstructions,
+      ...peerList,
+      ...taskSummary,
+      ...budgetInfo,
+      ...(notepadCtx ? [notepadCtx] : []),
       "When you finish a task, mark it done with team_tasks and send a summary to the lead with team_message.",
       "You can message any teammate by name — not just the lead. Coordinate directly with peers when useful.",
       "",
@@ -553,12 +657,38 @@ export namespace Team {
     // Fire-and-forget the teammate's prompt loop.
     // Wrapped in Promise.resolve().then() to guard against synchronous throws.
     log.info("spawning teammate", { teamName: input.teamName, name: input.name, sessionID: session.id })
+
+    // Timeout enforcement: cancel the teammate if they exceed the time limit
+    const timeoutMs = input.timeout ? input.timeout * 60 * 1000 : undefined
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined
+    if (timeoutMs) {
+      timeoutHandle = setTimeout(async () => {
+        log.warn("teammate timeout", { teamName: input.teamName, name: input.name, timeout: input.timeout })
+        await transitionExecutionStatus(input.teamName, input.name, "timed_out")
+        SessionPrompt.cancel(session.id)
+        await Bus.publish(TeamEvent.MemberTimeout, {
+          teamName: input.teamName,
+          memberName: input.name,
+          elapsed: timeoutMs,
+          limit: timeoutMs,
+        })
+        const { TeamMessaging: TM } = await import("./messaging")
+        await TM.send({
+          teamName: input.teamName,
+          from: input.name,
+          to: "lead",
+          text: `I was automatically timed out after ${input.timeout} minutes. Review my session (${session.id}) for partial results.`,
+        }).catch(() => {})
+      }, timeoutMs)
+    }
+
     Promise.resolve()
       .then(async () => {
         await transitionExecutionStatus(input.teamName, input.name, "running")
         return SessionPrompt.loop({ sessionID: session.id })
       })
       .then(async () => {
+        if (timeoutHandle) clearTimeout(timeoutHandle)
         log.info("teammate loop ended", { teamName: input.teamName, name: input.name })
         await transitionExecutionStatus(input.teamName, input.name, "completing")
         await transitionExecutionStatus(input.teamName, input.name, "completed")
@@ -573,6 +703,7 @@ export namespace Team {
         await notifyLead(input.teamName, input.name, session.id, "completed")
       })
       .catch(async (err) => {
+        if (timeoutHandle) clearTimeout(timeoutHandle)
         log.warn("teammate loop error", { teamName: input.teamName, name: input.name, error: err.message })
         await transitionExecutionStatus(input.teamName, input.name, "failed")
         await transitionExecutionStatus(input.teamName, input.name, "idle")

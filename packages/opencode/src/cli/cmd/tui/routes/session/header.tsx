@@ -164,6 +164,13 @@ export function Header() {
               )}
               <ContextInfo context={context} cost={cost} />
             </box>
+            <Show when={sync.data.team[route.sessionID]}>
+              {(teamData) => (
+                <text fg={theme.textMuted} wrapMode="none" flexShrink={0}>
+                  [{teamData().teamName} | {teamData().members.length} members | {teamData().members.filter((m) => m.status === "busy").length} busy]
+                </text>
+              )}
+            </Show>
           </Match>
         </Switch>
       </box>

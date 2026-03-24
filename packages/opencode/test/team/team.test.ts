@@ -14,6 +14,7 @@ import {
   TeamShutdownTool,
   TeamCleanupTool,
 } from "../../src/tool/team"
+import { Session } from "../../src/session"
 
 Log.init({ print: false })
 
@@ -77,6 +78,20 @@ describe("Team", () => {
     })
   })
 
+  test("create rejects unsafe team names", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        for (const name of ["../escape", "bad/name", "Upper"]) {
+          await expect(Team.create({ name, leadSessionID: "ses_unsafe" })).rejects.toThrow()
+        }
+      },
+    })
+  })
+
   test("add and remove members", async () => {
     await Instance.provide({
       directory: projectRoot,
@@ -116,6 +131,79 @@ describe("Team", () => {
         // Cleanup: set remaining member to shutdown first
         await Team.setMemberStatus("member-team", "implementer", "shutdown")
         await Team.cleanup("member-team")
+      },
+    })
+  })
+
+  test("addMember rejects unsafe member names", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        await Team.create({ name: "safe-team", leadSessionID: "ses_lead_safe" })
+
+        for (const name of ["../worker", "bad/name", "Worker"]) {
+          await expect(
+            Team.addMember("safe-team", {
+              name,
+              sessionID: "ses_worker_safe",
+              agent: "general",
+              status: "busy",
+            }),
+          ).rejects.toThrow()
+        }
+
+        await Team.cleanup("safe-team")
+      },
+    })
+  })
+
+  test("cleanup only removes delegate rules added by team mode", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const unsub = Team.onCleanedRestorePermissions()
+        const session = await Session.create({
+          permission: [
+            {
+              permission: "bash",
+              pattern: "*",
+              action: "deny",
+            },
+          ],
+        })
+
+        const tool = await TeamCreateTool.init()
+        const created = await tool.execute({ name: "delegate-team", delegate: true }, {
+          sessionID: session.id,
+          messageID: "msg_1",
+          agent: "general",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => {},
+          ask: async () => {},
+        } as any)
+
+        expect(created.title).toContain("delegate-team")
+
+        await Team.cleanup("delegate-team")
+
+        const next = await Session.get(session.id)
+        expect(next.permission).toEqual([
+          {
+            permission: "bash",
+            pattern: "*",
+            action: "deny",
+          },
+        ])
+
+        unsub()
+        await Session.remove(session.id)
       },
     })
   })

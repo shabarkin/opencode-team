@@ -114,4 +114,40 @@ export namespace Inbox {
     // Also remove the lead inbox
     await remove(teamName, "lead")
   }
+
+  const MAX_MESSAGES = 1000
+  const PRUNE_AGE = 60 * 60 * 1000 // 1 hour
+
+  /**
+   * Prune old read messages from an inbox.
+   * Keeps max MAX_MESSAGES and removes read messages older than PRUNE_AGE.
+   * Returns the number of messages removed.
+   */
+  export async function prune(teamName: string, agentName: string): Promise<number> {
+    const target = filepath(teamName, agentName)
+    using _ = await Lock.write(target)
+    const content = await Bun.file(target)
+      .text()
+      .catch(() => "")
+    const messages = parse(content)
+    if (messages.length <= MAX_MESSAGES / 2) return 0
+
+    const now = Date.now()
+    const kept = messages.filter((m) => {
+      if (!m.read) return true
+      if (now - m.timestamp < PRUNE_AGE) return true
+      return false
+    })
+
+    // Also enforce hard cap
+    const final = kept.length > MAX_MESSAGES ? kept.slice(-MAX_MESSAGES) : kept
+    const removed = messages.length - final.length
+    if (removed === 0) return 0
+
+    await Bun.write(target, final.map((m) => JSON.stringify(m)).join("\n") + "\n")
+    log.info("inbox pruned", { teamName, agentName, removed, remaining: final.length })
+
+    await Bus.publish(TeamEvent.InboxPruned, { teamName, agentName, removed })
+    return removed
+  }
 }

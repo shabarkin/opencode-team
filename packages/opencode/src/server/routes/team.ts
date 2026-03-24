@@ -1,13 +1,71 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import z from "zod"
 import { describeRoute, validator, resolver } from "hono-openapi"
-import { Team, TeamTasks, TeamInfoSchema, TeamTaskSchema, WRITE_TOOLS } from "@/team"
+import {
+  Team,
+  TeamTasks,
+  TeamNameSchema,
+  MemberNameSchema,
+  TeamInfoPublicSchema,
+  TeamInfoSessionSchema,
+  TeamTaskSchema,
+  addDelegateRules,
+  removeDelegateRules,
+} from "@/team"
 import { Session } from "@/session"
 import { SessionID } from "@/session/schema"
 import { lazy } from "../../util/lazy"
 import { errors } from "../error"
 
 const Delegate = z.object({ enabled: z.boolean() })
+
+const TeamSessionResponse = z.object({
+  team: TeamInfoSessionSchema,
+  tasks: z.array(TeamTaskSchema),
+  role: z.enum(["lead", "member"]),
+  memberName: MemberNameSchema.optional(),
+})
+
+function caller(c: Context) {
+  const raw = c.req.header("x-opencode-session")
+  if (!raw) return
+  const result = SessionID.zod.safeParse(raw)
+  if (!result.success) return
+  return result.data
+}
+
+function publicTeam(team: Awaited<ReturnType<typeof Team.get>> extends infer T ? Exclude<T, undefined> : never) {
+  return {
+    name: team.name,
+    created: team.created,
+    delegate: team.delegate,
+    members: team.members.map((member) => ({
+      name: member.name,
+      agent: member.agent,
+      status: member.status,
+      execution_status: member.execution_status,
+      model: member.model,
+      planApproval: member.planApproval,
+    })),
+  }
+}
+
+function sessionTeam(team: Awaited<ReturnType<typeof Team.get>> extends infer T ? Exclude<T, undefined> : never) {
+  return {
+    name: team.name,
+    created: team.created,
+    delegate: team.delegate,
+    members: team.members.map((member) => ({
+      name: member.name,
+      sessionID: member.sessionID,
+      agent: member.agent,
+      status: member.status,
+      execution_status: member.execution_status,
+      model: member.model,
+      planApproval: member.planApproval,
+    })),
+  }
+}
 
 export const TeamRoutes = lazy(() =>
   new Hono()
@@ -20,12 +78,17 @@ export const TeamRoutes = lazy(() =>
         responses: {
           200: {
             description: "List of teams",
-            content: { "application/json": { schema: resolver(TeamInfoSchema.array()) } },
+            content: { "application/json": { schema: resolver(TeamInfoPublicSchema.array()) } },
           },
+          ...errors(403),
         },
       }),
       async (c) => {
-        return c.json(await Team.list())
+        const sid = caller(c)
+        if (!sid) return c.json({ error: "Forbidden" }, 403)
+        const team = await Team.findBySession(sid)
+        if (!team) return c.json([])
+        return c.json([publicTeam(team.team)])
       },
     )
     .get(
@@ -37,16 +100,18 @@ export const TeamRoutes = lazy(() =>
         responses: {
           200: {
             description: "Team info",
-            content: { "application/json": { schema: resolver(TeamInfoSchema) } },
+            content: { "application/json": { schema: resolver(TeamInfoPublicSchema) } },
           },
-          ...errors(404),
+          ...errors(403, 404),
         },
       }),
-      validator("param", z.object({ name: z.string() })),
+      validator("param", z.object({ name: TeamNameSchema })),
       async (c) => {
-        const team = await Team.get(c.req.valid("param").name)
-        if (!team) return c.json({ error: "Team not found" }, 404)
-        return c.json(team)
+        const sid = caller(c)
+        if (!sid) return c.json({ error: "Forbidden" }, 403)
+        const match = await Team.findBySession(sid)
+        if (!match || match.team.name !== c.req.valid("param").name) return c.json({ error: "Forbidden" }, 403)
+        return c.json(publicTeam(match.team))
       },
     )
     .get(
@@ -60,10 +125,15 @@ export const TeamRoutes = lazy(() =>
             description: "List of tasks",
             content: { "application/json": { schema: resolver(TeamTaskSchema.array()) } },
           },
+          ...errors(403),
         },
       }),
-      validator("param", z.object({ name: z.string() })),
+      validator("param", z.object({ name: TeamNameSchema })),
       async (c) => {
+        const sid = caller(c)
+        if (!sid) return c.json({ error: "Forbidden" }, 403)
+        const match = await Team.findBySession(sid)
+        if (!match || match.team.name !== c.req.valid("param").name) return c.json({ error: "Forbidden" }, 403)
         return c.json(await TeamTasks.list(c.req.valid("param").name))
       },
     )
@@ -74,15 +144,21 @@ export const TeamRoutes = lazy(() =>
         description: "Find the team a session belongs to.",
         operationId: "team.bySession",
         responses: {
-          200: { description: "Team info with role and tasks" },
+          200: {
+            description: "Team info with role and tasks",
+            content: { "application/json": { schema: resolver(TeamSessionResponse.nullable()) } },
+          },
+          ...errors(403),
         },
       }),
-      validator("param", z.object({ sessionID: z.string() })),
+      validator("param", z.object({ sessionID: SessionID.zod })),
       async (c) => {
-        const result = await Team.findBySession(c.req.valid("param").sessionID)
+        const sessionID = c.req.valid("param").sessionID
+        if (caller(c) !== sessionID) return c.json({ error: "Forbidden" }, 403)
+        const result = await Team.findBySession(sessionID)
         if (!result) return c.json(null)
         return c.json({
-          team: result.team,
+          team: sessionTeam(result.team),
           tasks: await TeamTasks.list(result.team.name),
           role: result.role,
           memberName: result.memberName,
@@ -97,33 +173,27 @@ export const TeamRoutes = lazy(() =>
         operationId: "team.delegate",
         responses: {
           200: { description: "Delegate mode updated" },
-          ...errors(400, 404),
+          ...errors(400, 403, 404),
         },
       }),
-      validator("param", z.object({ name: z.string() })),
+      validator("param", z.object({ name: TeamNameSchema })),
       validator("json", Delegate),
       async (c) => {
+        const sid = caller(c)
+        if (!sid) return c.json({ error: "Forbidden" }, 403)
         const { name } = c.req.valid("param")
         const { enabled } = c.req.valid("json")
+        const match = await Team.findBySession(sid)
+        if (!match || match.role !== "lead" || match.team.name !== name) return c.json({ error: "Forbidden" }, 403)
         const team = await Team.get(name)
         if (!team) return c.json({ error: "Team not found" }, 404)
 
-        const sid = SessionID.make(team.leadSessionID)
-        const session = await Session.get(sid)
-        let permission = session.permission ?? []
-        if (enabled) {
-          permission = [
-            ...permission,
-            ...WRITE_TOOLS.filter((tool) => !permission.some((r) => r.permission === tool && r.action === "deny")).map(
-              (tool) => ({ permission: tool, pattern: "*", action: "deny" as const }),
-            ),
-          ]
-        } else {
-          permission = permission.filter(
-            (rule) => !((WRITE_TOOLS as readonly string[]).includes(rule.permission) && rule.action === "deny"),
-          )
-        }
-        await Session.setPermission({ sessionID: sid, permission })
+        const lead = SessionID.make(team.leadSessionID)
+        const session = await Session.get(lead)
+        const permission = enabled
+          ? addDelegateRules(session.permission ?? [])
+          : removeDelegateRules(session.permission ?? [])
+        await Session.setPermission({ sessionID: lead, permission })
 
         await Team.setDelegate(name, enabled)
         return c.json({ ok: true, delegate: enabled })
@@ -138,14 +208,18 @@ export const TeamRoutes = lazy(() =>
         operationId: "team.cancel",
         responses: {
           200: { description: "Number of cancelled members" },
-          ...errors(404),
+          ...errors(403, 404),
         },
       }),
-      validator("param", z.object({ name: z.string() })),
-      validator("json", z.object({ member: z.string().optional() })),
+      validator("param", z.object({ name: TeamNameSchema })),
+      validator("json", z.object({ member: MemberNameSchema.optional() })),
       async (c) => {
+        const sid = caller(c)
+        if (!sid) return c.json({ error: "Forbidden" }, 403)
         const { name } = c.req.valid("param")
         const { member } = c.req.valid("json")
+        const match = await Team.findBySession(sid)
+        if (!match || match.role !== "lead" || match.team.name !== name) return c.json({ error: "Forbidden" }, 403)
         const team = await Team.get(name)
         if (!team) return c.json({ error: "Team not found" }, 404)
 
