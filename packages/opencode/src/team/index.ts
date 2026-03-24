@@ -232,7 +232,7 @@ export namespace Team {
    */
   export const get = fn(z.string(), async (name) => {
     try {
-      return normalizeTeam(await Storage.read<TeamInfo>(configKey(name)))
+      return normalizeTeam(TeamInfoSchema.parse(await Storage.read<TeamInfo>(configKey(name))))
     } catch {
       return undefined
     }
@@ -244,7 +244,15 @@ export namespace Team {
   export async function list(): Promise<TeamInfo[]> {
     try {
       const keys = await Storage.list(["team", Instance.project.id])
-      return (await Promise.all(keys.map((key) => Storage.read<TeamInfo>(key).catch(() => undefined))))
+      return (
+        await Promise.all(
+          keys.map((key) =>
+            Storage.read<TeamInfo>(key)
+              .then(TeamInfoSchema.parse)
+              .catch(() => undefined),
+          ),
+        )
+      )
         .filter((t): t is TeamInfo => t !== undefined)
         .map(normalizeTeam)
     } catch {
@@ -579,22 +587,29 @@ export namespace Team {
     const tasks = await TeamTasks.list(input.teamName)
 
     const otherMembers = team?.members.filter((m) => m.name !== input.name && m.status !== "shutdown") ?? []
-    const peerList = otherMembers.length > 0
-      ? ["Other active teammates:", ...otherMembers.map((m) => `  - ${m.name} (@${m.agent}): ${m.status}`), ""]
-      : []
+    const peerList =
+      otherMembers.length > 0
+        ? ["Other active teammates:", ...otherMembers.map((m) => `  - ${m.name} (@${m.agent}): ${m.status}`), ""]
+        : []
 
-    const taskSummary = tasks.length > 0
-      ? ["Current task board:", ...tasks.map((t) => `  [${t.id}] ${t.content} — ${t.status}${t.assignee ? ` (${t.assignee})` : ""}`), ""]
-      : []
+    const taskSummary =
+      tasks.length > 0
+        ? [
+            "Current task board:",
+            ...tasks.map((t) => `  [${t.id}] ${t.content} — ${t.status}${t.assignee ? ` (${t.assignee})` : ""}`),
+            "",
+          ]
+        : []
 
-    const budgetInfo = input.timeout || input.maxTokens
-      ? [
-          "Budget constraints:",
-          ...(input.timeout ? [`  - Time limit: ${input.timeout} minutes`] : []),
-          ...(input.maxTokens ? [`  - Token budget: ${input.maxTokens} tokens`] : []),
-          "",
-        ]
-      : []
+    const budgetInfo =
+      input.timeout || input.maxTokens
+        ? [
+            "Budget constraints:",
+            ...(input.timeout ? [`  - Time limit: ${input.timeout} minutes`] : []),
+            ...(input.maxTokens ? [`  - Token budget: ${input.maxTokens} tokens`] : []),
+            "",
+          ]
+        : []
 
     const context = [
       `You are "${input.name}", a teammate in team "${input.teamName}".`,

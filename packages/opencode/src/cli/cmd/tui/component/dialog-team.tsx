@@ -70,7 +70,11 @@ export function DialogTeam() {
   // Refresh team data on open
   onMount(() => {
     dialog.setSize("large")
-    fetch(`${sdk.url}/team/by-session/${route.sessionID}`)
+    fetch(`${sdk.url}/team/by-session/${route.sessionID}`, {
+      headers: {
+        "x-opencode-session": route.sessionID,
+      },
+    })
       .then((r: Response) => r.json())
       .then((data: any) => {
         if (!data) return
@@ -78,6 +82,7 @@ export function DialogTeam() {
           teamName: data.team.name,
           role: data.role,
           memberName: data.memberName,
+          delegate: data.team.delegate,
           members: data.team.members ?? [],
           tasks: data.tasks ?? [],
         })

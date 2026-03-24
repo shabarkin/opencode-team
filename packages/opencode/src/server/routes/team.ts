@@ -26,6 +26,8 @@ const TeamSessionResponse = z.object({
   memberName: MemberNameSchema.optional(),
 })
 
+type Info = NonNullable<Awaited<ReturnType<typeof Team.get>>>
+
 function caller(c: Context) {
   const raw = c.req.header("x-opencode-session")
   if (!raw) return
@@ -34,7 +36,7 @@ function caller(c: Context) {
   return result.data
 }
 
-function publicTeam(team: Awaited<ReturnType<typeof Team.get>> extends infer T ? Exclude<T, undefined> : never) {
+function publicTeam(team: Info) {
   return {
     name: team.name,
     created: team.created,
@@ -50,7 +52,7 @@ function publicTeam(team: Awaited<ReturnType<typeof Team.get>> extends infer T ?
   }
 }
 
-function sessionTeam(team: Awaited<ReturnType<typeof Team.get>> extends infer T ? Exclude<T, undefined> : never) {
+function sessionTeam(team: Info) {
   return {
     name: team.name,
     created: team.created,

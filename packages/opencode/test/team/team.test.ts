@@ -86,7 +86,7 @@ describe("Team", () => {
       },
       fn: async () => {
         for (const name of ["../escape", "bad/name", "Upper"]) {
-          await expect(Team.create({ name, leadSessionID: "ses_unsafe" })).rejects.toThrow()
+          expect(() => Team.create({ name, leadSessionID: "ses_unsafe" })).toThrow()
         }
       },
     })
@@ -145,14 +145,14 @@ describe("Team", () => {
         await Team.create({ name: "safe-team", leadSessionID: "ses_lead_safe" })
 
         for (const name of ["../worker", "bad/name", "Worker"]) {
-          await expect(
+          expect(() =>
             Team.addMember("safe-team", {
               name,
               sessionID: "ses_worker_safe",
               agent: "general",
               status: "busy",
             }),
-          ).rejects.toThrow()
+          ).toThrow()
         }
 
         await Team.cleanup("safe-team")

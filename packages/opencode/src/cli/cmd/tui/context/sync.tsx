@@ -143,6 +143,17 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
     const sdk = useSDK()
 
+    function team(data: any) {
+      return {
+        teamName: data.team.name,
+        role: data.role,
+        memberName: data.memberName,
+        delegate: data.team.delegate,
+        members: data.team.members ?? [],
+        tasks: data.tasks ?? [],
+      }
+    }
+
     async function syncWorkspaces() {
       const result = await sdk.client.experimental.workspace.list().catch(() => undefined)
       if (!result?.data) return
@@ -385,7 +396,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           setStore("vcs", { branch: event.properties.branch })
           break
         }
-
       }
 
       // Team events — handled outside the typed switch since team event types
@@ -394,11 +404,15 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       if (type.startsWith("team.")) {
         // Refresh team data from the server for all active sessions
         for (const sessionID of Object.keys(store.session_status)) {
-          fetch(`/team/by-session/${sessionID}`)
-            .then((res) => res.ok ? res.json() : null)
+          fetch(`${sdk.url}/team/by-session/${sessionID}`, {
+            headers: {
+              "x-opencode-session": sessionID,
+            },
+          })
+            .then((res) => (res.ok ? res.json() : null))
             .then((data) => {
               if (data) {
-                setStore("team", sessionID, reconcile(data as any))
+                setStore("team", sessionID, reconcile(team(data)))
               }
             })
             .catch(() => {})
