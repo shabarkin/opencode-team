@@ -400,22 +400,101 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
       // Team events — handled outside the typed switch since team event types
       // aren't in the SDK event union yet (they come from BusEvent.define in team/events.ts)
-      const type = (event as { type: string }).type
-      if (type.startsWith("team.")) {
-        // Refresh team data from the server for all active sessions
-        for (const sessionID of Object.keys(store.session_status)) {
-          fetch(`${sdk.url}/team/by-session/${sessionID}`, {
-            headers: {
-              "x-opencode-session": sessionID,
-            },
-          })
-            .then((res) => (res.ok ? res.json() : null))
-            .then((data) => {
-              if (data) {
-                setStore("team", sessionID, reconcile(team(data)))
-              }
+      const raw = event as any
+      if (typeof raw.type === "string" && raw.type.startsWith("team.")) {
+        switch (raw.type) {
+          case "team.created": {
+            const t = raw.properties.team
+            setStore("team", t.leadSessionID, {
+              teamName: t.name,
+              role: "lead",
+              delegate: t.delegate,
+              members: t.members ?? [],
+              tasks: [],
             })
-            .catch(() => {})
+            break
+          }
+          case "team.member.spawned": {
+            const { teamName, member } = raw.properties
+            for (const [sid, entry] of Object.entries(store.team)) {
+              const e = entry as any
+              if (e?.teamName === teamName) {
+                setStore("team", sid, "members", (prev: any[]) => [...(prev ?? []), member])
+              }
+            }
+            setStore("team", member.sessionID, {
+              teamName,
+              role: "member",
+              memberName: member.name,
+              members: [],
+              tasks: [],
+            })
+            break
+          }
+          case "team.member.status": {
+            const { teamName, memberName, status } = raw.properties
+            for (const [sid, entry] of Object.entries(store.team)) {
+              const e = entry as any
+              if (e?.teamName === teamName && e?.members) {
+                const idx = e.members.findIndex((m: any) => m.name === memberName)
+                if (idx >= 0) {
+                  setStore("team", sid, "members", idx, "status", status)
+                }
+              }
+            }
+            break
+          }
+          case "team.member.execution": {
+            const { teamName, memberName, status } = raw.properties
+            for (const [sid, entry] of Object.entries(store.team)) {
+              const e = entry as any
+              if (e?.teamName === teamName && e?.members) {
+                const idx = e.members.findIndex((m: any) => m.name === memberName)
+                if (idx >= 0) {
+                  setStore("team", sid, "members", idx, "execution_status", status)
+                }
+              }
+            }
+            break
+          }
+          case "team.task.updated": {
+            const { teamName, tasks } = raw.properties
+            for (const [sid, entry] of Object.entries(store.team)) {
+              const e = entry as any
+              if (e?.teamName === teamName) {
+                setStore("team", sid, "tasks", reconcile(tasks))
+              }
+            }
+            break
+          }
+          case "team.task.claimed": {
+            const { teamName, taskId, memberName } = raw.properties
+            for (const [sid, entry] of Object.entries(store.team)) {
+              const e = entry as any
+              if (e?.teamName === teamName && e?.tasks) {
+                const idx = e.tasks.findIndex((t: any) => t.id === taskId)
+                if (idx >= 0) {
+                  setStore("team", sid, "tasks", idx, "status", "in_progress")
+                  setStore("team", sid, "tasks", idx, "assignee", memberName)
+                }
+              }
+            }
+            break
+          }
+          case "team.cleaned": {
+            const { teamName } = raw.properties
+            setStore(
+              "team",
+              produce((draft: any) => {
+                for (const [sid, entry] of Object.entries(draft)) {
+                  if ((entry as any)?.teamName === teamName) {
+                    delete draft[sid]
+                  }
+                }
+              }),
+            )
+            break
+          }
         }
       }
     })
@@ -557,6 +636,24 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             }),
           )
           fullSyncedSessions.add(sessionID)
+
+          // Fetch team context for this session (non-blocking)
+          if (!store.team[sessionID]) {
+            fetch(`${sdk.url}/team/by-session/${sessionID}`)
+              .then((r: Response) => r.json())
+              .then((data: any) => {
+                if (!data) return
+                setStore("team", sessionID, {
+                  teamName: data.team.name,
+                  role: data.role,
+                  memberName: data.memberName,
+                  delegate: data.team.delegate,
+                  members: data.team.members ?? [],
+                  tasks: data.tasks ?? [],
+                })
+              })
+              .catch(() => {})
+          }
         },
       },
       workspace: {
