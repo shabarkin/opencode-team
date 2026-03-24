@@ -10,6 +10,40 @@ import { TeamEvent } from "../team/events"
 import { TeamStatusTool } from "./team-status"
 import { TeamNotepadTool } from "./team-notepad"
 
+const SHUTDOWN_TIMEOUT = 30_000
+
+async function wake(teamName: string, name: string, sessionID: string) {
+  const { SessionPrompt } = await import("../session/prompt")
+  const { SessionStatus } = await import("../session/status")
+  const { SessionID } = await import("../session/schema")
+
+  const sid = SessionID.make(sessionID)
+  const status = await SessionStatus.get(sid)
+  if (status.type !== "idle") return
+
+  SessionPrompt.loop({ sessionID: sid })
+    .then(async () => {
+      const team = await Team.get(teamName)
+      const member = team?.members.find((m) => m.name === name)
+      if (member?.status !== "shutdown_requested") return
+      await Team.transitionMemberStatus(teamName, name, "shutdown")
+    })
+    .catch(() => {})
+}
+
+function timeout(teamName: string, name: string, sessionID: string) {
+  setTimeout(async () => {
+    const team = await Team.get(teamName)
+    const member = team?.members.find((m) => m.name === name)
+    if (!member || member.status === "shutdown") return
+
+    const { SessionPrompt } = await import("../session/prompt")
+    const { SessionID } = await import("../session/schema")
+    await SessionPrompt.cancel(SessionID.make(sessionID))
+    await Team.transitionMemberStatus(teamName, name, "shutdown", { force: true })
+  }, SHUTDOWN_TIMEOUT)
+}
+
 /**
  * Create a new agent team. Only the lead session should call this.
  */
@@ -604,6 +638,7 @@ export const TeamShutdownTool = Tool.define("team_shutdown", {
       }
     }
 
+    const status = member.status
     const reason = params.reason ?? "The lead has requested you shut down."
 
     // Transition to shutdown_requested BEFORE sending the message.
@@ -621,25 +656,35 @@ export const TeamShutdownTool = Tool.define("team_shutdown", {
     // sees shutdown_requested and transitions to shutdown.
     // If the send fails, fall back to direct shutdown since there's
     // no loop that will trigger the transition.
-    try {
-      await TeamMessaging.send({
-        teamName: teamInfo.team.name,
-        from: "lead",
-        to: params.name,
-        text: [
-          `SHUTDOWN REQUEST: ${reason}`,
-          "",
-          "Please wrap up your current work:",
-          "1. Summarize your findings and send them to the lead.",
-          "2. Stop working after sending your summary.",
-        ].join("\n"),
-      })
-    } catch {
-      await Team.transitionMemberStatus(teamInfo.team.name, params.name, "shutdown")
+    const sent = await TeamMessaging.send({
+      teamName: teamInfo.team.name,
+      from: "lead",
+      to: params.name,
+      text: [
+        `SHUTDOWN REQUEST: ${reason}`,
+        "",
+        "Please wrap up your current work:",
+        "1. Summarize your findings and send them to the lead.",
+        "2. Stop working after sending your summary.",
+      ].join("\n"),
+    }).then(
+      () => true,
+      async () => {
+        const { SessionPrompt } = await import("../session/prompt")
+        const { SessionID } = await import("../session/schema")
+        await SessionPrompt.cancel(SessionID.make(member.sessionID))
+        await Team.transitionMemberStatus(teamInfo.team.name, params.name, "shutdown")
+        return false
+      },
+    )
+
+    if (status === "busy") {
+      await Team.cancelMember(teamInfo.team.name, params.name)
     }
 
-    if (member.status === "busy") {
-      await Team.cancelMember(teamInfo.team.name, params.name)
+    if (sent) {
+      await wake(teamInfo.team.name, params.name, member.sessionID)
+      timeout(teamInfo.team.name, params.name, member.sessionID)
     }
 
     return {
@@ -760,7 +805,7 @@ export const TeamHealthTool = Tool.define("team_health", {
     }
 
     // Check for file conflicts
-    const conflicts = activeConflicts(team.name)
+    const conflicts = activeConflicts(team.name, team)
     for (const c of conflicts) {
       issues.push(`CONFLICT: ${c.file} edited by: ${c.members.join(", ")}`)
     }

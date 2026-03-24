@@ -17,6 +17,8 @@ import {
   TeamCleanupTool,
 } from "../../src/tool/team"
 import { Session } from "../../src/session"
+import { SessionPrompt } from "../../src/session/prompt"
+import { SessionStatus } from "../../src/session/status"
 import { TeamNotepad } from "../../src/team/notepad"
 import { TeamMessaging } from "../../src/team/messaging"
 import { TeamStatusTool } from "../../src/tool/team-status"
@@ -907,6 +909,111 @@ describe("Team tool definitions", () => {
 
         await Team.setMemberStatus("shutdown-guard-team", "worker-x", "shutdown")
         await Team.cleanup("shutdown-guard-team")
+      },
+    })
+  })
+
+  test("TeamShutdownTool cancels busy members and starts a final shutdown loop", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        await Team.create({ name: "shutdown-busy-team", leadSessionID: "ses_shutdown_busy_lead" })
+        await Team.addMember("shutdown-busy-team", {
+          name: "worker-y",
+          sessionID: "ses_worker_y",
+          agent: "general",
+          status: "busy",
+        })
+
+        const send = spyOn(TeamMessaging, "send").mockImplementation(async () => {})
+        const cancel = spyOn(Team, "cancelMember").mockResolvedValue(true)
+        const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "idle" } as any)
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue({} as any)
+        const timer = spyOn(globalThis, "setTimeout").mockImplementation((() => 1) as any)
+
+        const tool = await TeamShutdownTool.init()
+        const result = await tool.execute({ name: "worker-y" }, {
+          sessionID: "ses_shutdown_busy_lead",
+          messageID: "msg_1",
+          agent: "general",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => {},
+          ask: async () => {},
+        } as any)
+
+        await Bun.sleep(10)
+
+        expect(result.title).toBe("Shutdown requested: worker-y")
+        expect(cancel).toHaveBeenCalledWith("shutdown-busy-team", "worker-y")
+        expect(loop).toHaveBeenCalledWith({ sessionID: "ses_worker_y" })
+        expect((await Team.get("shutdown-busy-team"))?.members.find((m) => m.name === "worker-y")?.status).toBe(
+          "shutdown",
+        )
+
+        timer.mockRestore()
+        loop.mockRestore()
+        status.mockRestore()
+        cancel.mockRestore()
+        send.mockRestore()
+        await Team.cleanup("shutdown-busy-team")
+      },
+    })
+  })
+
+  test("TeamShutdownTool force shuts down stuck members after timeout", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        await Team.create({ name: "shutdown-timeout-team", leadSessionID: "ses_shutdown_timeout_lead" })
+        await Team.addMember("shutdown-timeout-team", {
+          name: "worker-z",
+          sessionID: "ses_worker_z",
+          agent: "general",
+          status: "ready",
+        })
+
+        const wait: Array<() => Promise<void>> = []
+        const send = spyOn(TeamMessaging, "send").mockImplementation(async () => {})
+        const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "idle" } as any)
+        const loop = spyOn(SessionPrompt, "loop").mockImplementation(((_input: any) => new Promise(() => {})) as any)
+        const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue()
+        const timer = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => Promise<void>) => {
+          wait.push(fn)
+          return 1 as any
+        }) as any)
+
+        const tool = await TeamShutdownTool.init()
+        await tool.execute({ name: "worker-z" }, {
+          sessionID: "ses_shutdown_timeout_lead",
+          messageID: "msg_1",
+          agent: "general",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => {},
+          ask: async () => {},
+        } as any)
+
+        expect(wait).toHaveLength(1)
+        await wait[0]!()
+
+        expect(cancel).toHaveBeenCalledWith("ses_worker_z")
+        expect((await Team.get("shutdown-timeout-team"))?.members.find((m) => m.name === "worker-z")?.status).toBe(
+          "shutdown",
+        )
+
+        timer.mockRestore()
+        cancel.mockRestore()
+        loop.mockRestore()
+        status.mockRestore()
+        send.mockRestore()
+        await Team.cleanup("shutdown-timeout-team")
       },
     })
   })

@@ -6,6 +6,14 @@ import { TeamMessaging } from "./messaging"
 
 const log = Log.create({ service: "team.files" })
 
+function closing(status?: string) {
+  return status === "shutdown" || status === "shutdown_requested"
+}
+
+function shutdowns(team?: { members: Array<{ name: string; status: string }> }) {
+  return new Set((team?.members ?? []).filter((m) => closing(m.status)).map((m) => m.name))
+}
+
 /** Tracks which team member last edited a file and when */
 interface FileEdit {
   teamName: string
@@ -72,11 +80,16 @@ export function initFileTracking(): () => void {
 
         // Notify both teammates and the lead
         const warning = `[System]: File conflict — ${[...members, editor].join(", ")} edited ${file.file} within ${Math.round(CONFLICT_WINDOW / 60000)} minutes. Coordinate to avoid overwriting each other's changes.`
+        const team = await Team.get(teamName)
+        const skip = shutdowns(team)
 
         for (const member of members) {
+          if (skip.has(member)) continue
           await TeamMessaging.send({ teamName, from: "system", to: member, text: warning }).catch(() => {})
         }
-        await TeamMessaging.send({ teamName, from: "system", to: editor, text: warning }).catch(() => {})
+        if (!skip.has(editor)) {
+          await TeamMessaging.send({ teamName, from: "system", to: editor, text: warning }).catch(() => {})
+        }
         await TeamMessaging.send({ teamName, from: "system", to: "lead", text: warning }).catch(() => {})
       }
 
@@ -113,9 +126,13 @@ export function recentEdits(teamName: string): Array<{ file: string; memberName:
 /**
  * Get active file conflicts (files edited by multiple members within window).
  */
-export function activeConflicts(teamName: string): Array<{ file: string; members: string[] }> {
+export function activeConflicts(
+  teamName: string,
+  team?: { members: Array<{ name: string; status: string }> },
+): Array<{ file: string; members: string[] }> {
   const now = Date.now()
   const result: Array<{ file: string; members: string[] }> = []
+  const skip = shutdowns(team)
 
   for (const [id, list] of edits) {
     const next = recent(list, now)
@@ -124,7 +141,9 @@ export function activeConflicts(teamName: string): Array<{ file: string; members
       continue
     }
     edits.set(id, next)
-    const members = [...new Set(next.filter((edit) => edit.teamName === teamName).map((edit) => edit.memberName))]
+    const members = [
+      ...new Set(next.filter((edit) => edit.teamName === teamName).map((edit) => edit.memberName)),
+    ].filter((name) => !skip.has(name))
     if (members.length < 2) continue
     result.push({ file: file(id), members })
   }

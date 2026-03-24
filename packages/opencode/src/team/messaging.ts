@@ -12,6 +12,10 @@ const log = Log.create({ service: "team.messaging" })
 const MAX_TEXT = 10 * 1024
 const TEAM_MESSAGE = true
 
+function closing(status?: string) {
+  return status === "shutdown" || status === "shutdown_requested"
+}
+
 function validateText(text: string) {
   if (text.length <= MAX_TEXT) return
   throw new Error(`Team message too large (${text.length} chars). Maximum is ${MAX_TEXT} chars.`)
@@ -81,7 +85,7 @@ export namespace TeamMessaging {
 
     // Send to all active members except the sender
     const memberTargets = team.members
-      .filter((m) => m.name !== input.from && m.status !== "shutdown")
+      .filter((m) => m.name !== input.from && !closing(m.status))
       .map((m) => ({ name: m.name, sessionID: m.sessionID }))
 
     const targets =
@@ -168,7 +172,7 @@ export namespace TeamMessaging {
           senderSessionID = team.leadSessionID
         } else {
           const member = team.members.find((m) => m.name === sender)
-          if (member && member.status !== "shutdown") senderSessionID = member.sessionID
+          if (member && !closing(member.status)) senderSessionID = member.sessionID
         }
         if (!senderSessionID) continue
 
@@ -251,7 +255,7 @@ export namespace TeamMessaging {
       const info = await Team.findBySession(sessionID)
       if (info && info.role === "member") {
         const member = info.team.members.find((m) => m.name === info.memberName)
-        if (member?.status === "shutdown") return
+        if (closing(member?.status)) return
       }
       log.info("auto-waking idle session", { sessionID, from })
       SessionPrompt.loop({ sessionID: SessionID.make(sessionID) })
