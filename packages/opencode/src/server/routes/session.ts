@@ -21,6 +21,11 @@ import { errors } from "../error"
 import { lazy } from "../../util/lazy"
 
 const log = Log.create({ service: "server" })
+const TeamMessage = z.object({
+  to: z.string(),
+  text: z.string(),
+  agent: z.string().optional(),
+})
 
 export const SessionRoutes = lazy(() =>
   new Hono()
@@ -379,7 +384,62 @@ export const SessionRoutes = lazy(() =>
         }),
       ),
       async (c) => {
-        SessionPrompt.cancel(c.req.valid("param").sessionID)
+        const sessionID = c.req.valid("param").sessionID
+        SessionPrompt.cancel(sessionID)
+
+        try {
+          const { Team } = await import("@/team")
+          const match = await Team.findBySession(sessionID)
+          if (match?.role === "lead") {
+            await Team.cancelAllMembers(match.team.name)
+          }
+        } catch {}
+
+        return c.json(true)
+      },
+    )
+    .post(
+      "/:sessionID/team-message",
+      describeRoute({
+        summary: "Send team message",
+        description: "Send a team message from the current session to a teammate or the lead.",
+        operationId: "session.teamMessage",
+        responses: {
+          200: {
+            description: "Sent team message",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400, 403, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: SessionID.zod,
+        }),
+      ),
+      validator("json", TeamMessage),
+      async (c) => {
+        const sessionID = c.req.valid("param").sessionID
+        const body = c.req.valid("json")
+        const { Team } = await import("@/team")
+        const { TeamMessaging } = await import("@/team/messaging")
+        const match = await Team.findBySession(sessionID)
+        if (!match) return c.json({ error: "Forbidden" }, 403)
+
+        const from = match.role === "lead" ? "lead" : match.memberName
+        if (!from) return c.json({ error: "Forbidden" }, 403)
+
+        await TeamMessaging.send({
+          teamName: match.team.name,
+          from,
+          to: body.to,
+          text: body.text,
+        })
         return c.json(true)
       },
     )

@@ -39,6 +39,13 @@ export namespace PackageRegistry {
     const isRange = /[\s^~*xX<>|=]/.test(cachedVersion)
     if (isRange) return !semver.satisfies(latestVersion, cachedVersion)
 
-    return semver.lt(cachedVersion, latestVersion)
+    const cached = semver.valid(cachedVersion) ?? semver.coerce(cachedVersion)?.version
+    const latest = semver.valid(latestVersion) ?? semver.coerce(latestVersion)?.version
+    if (!cached || !latest) {
+      log.warn("Failed to parse package versions, using cached", { pkg, cachedVersion, latestVersion })
+      return false
+    }
+
+    return semver.lt(cached, latest)
   }
 }

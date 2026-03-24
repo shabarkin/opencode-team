@@ -159,16 +159,33 @@ export function Session() {
   const [diffWrapMode] = kv.signal<"word" | "none">("diff_wrap_mode", "word")
   const [animationsEnabled, setAnimationsEnabled] = kv.signal("animations_enabled", true)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
+  const [selectedTeammate, setSelectedTeammate] = createSignal<string | null>(null)
+  const teamInfo = createMemo(() => sync.data.team[route.sessionID])
+  const teamMembers = createMemo(() => {
+    const info = teamInfo()
+    if (!info?.members?.length) return []
+    return info.members.filter((m) => m.sessionID && m.status !== "shutdown")
+  })
 
   const wide = createMemo(() => dimensions().width > 120)
   const sidebarVisible = createMemo(() => {
-    if (session()?.parentID) return false
+    if (session()?.parentID && !teamInfo()) return false
     if (sidebarOpen()) return true
     if (sidebar() === "auto" && wide()) return true
     return false
   })
   const showTimestamps = createMemo(() => timestamps() === "show")
   const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
+
+  createEffect(
+    on(
+      () => route.sessionID,
+      () => {
+        setSelectedTeammate(null)
+      },
+      { defer: true },
+    ),
+  )
 
   const scrollAcceleration = createMemo(() => {
     const tui = tuiConfig
@@ -266,6 +283,52 @@ export function Session() {
     }
   })
 
+  useKeyboard((evt) => {
+    if (evt.name !== "escape") return
+    const s = session()
+    if (!s?.parentID) return
+    if (!teamInfo()) return
+    const state = sync.data.session_status?.[route.sessionID]
+    if (state?.type !== "busy") return
+    evt.preventDefault()
+    sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+  })
+
+  useKeyboard((evt) => {
+    if (evt.name === "escape" && selectedTeammate()) {
+      evt.preventDefault()
+      setSelectedTeammate(null)
+      return
+    }
+
+    if (evt.shift !== true) return
+    if (evt.name !== "up" && evt.name !== "down") return
+    if (session()?.parentID) return
+
+    const members = teamMembers()
+    if (members.length === 0) return
+
+    evt.preventDefault()
+    const cur = selectedTeammate()
+    if (cur === null) {
+      setSelectedTeammate(evt.name === "down" ? members[0].name : members[members.length - 1].name)
+      return
+    }
+
+    const idx = members.findIndex((m) => m.name === cur)
+    if (idx < 0) {
+      setSelectedTeammate(null)
+      return
+    }
+
+    if (evt.name === "down") {
+      setSelectedTeammate(idx >= members.length - 1 ? null : members[idx + 1].name)
+      return
+    }
+
+    setSelectedTeammate(idx <= 0 ? null : members[idx - 1].name)
+  })
+
   // Helper: Find next visible message boundary in direction
   const findNextVisibleMessage = (direction: "next" | "prev"): string | null => {
     const children = scroll.getChildren()
@@ -353,6 +416,18 @@ export function Session() {
       if (!session()?.parentID || dialog.stack.length > 0) return
       func(dialog)
     }
+  }
+
+  function leadID() {
+    const info = teamInfo()
+    if (!info) return
+    return Object.entries(sync.data.team).find(
+      ([, entry]) => entry?.teamName === info.teamName && entry?.role === "lead",
+    )?.[0]
+  }
+
+  function teamSessions() {
+    return teamMembers()
   }
 
   const command = useCommandDialog()
@@ -976,6 +1051,99 @@ export function Session() {
         dialog.clear()
       }),
     },
+    {
+      title: "Next teammate",
+      value: "team.next",
+      category: "Team",
+      hidden: true,
+      enabled: !!teamInfo(),
+      onSelect: (dialog) => {
+        const members = teamSessions()
+        if (members.length === 0) {
+          dialog.clear()
+          return
+        }
+        const idx = members.findIndex((m) => m.sessionID === route.sessionID)
+        if (idx >= 0) {
+          navigate({ type: "session", sessionID: members[(idx + 1) % members.length].sessionID })
+          dialog.clear()
+          return
+        }
+        navigate({ type: "session", sessionID: members[0].sessionID })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Previous teammate",
+      value: "team.previous",
+      category: "Team",
+      hidden: true,
+      enabled: !!teamInfo(),
+      onSelect: (dialog) => {
+        const members = teamSessions()
+        if (members.length === 0) {
+          dialog.clear()
+          return
+        }
+        const idx = members.findIndex((m) => m.sessionID === route.sessionID)
+        if (idx >= 0) {
+          navigate({ type: "session", sessionID: members[(idx - 1 + members.length) % members.length].sessionID })
+          dialog.clear()
+          return
+        }
+        navigate({ type: "session", sessionID: members[members.length - 1].sessionID })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Go to team lead",
+      value: "team.lead",
+      category: "Team",
+      hidden: true,
+      enabled: !!teamInfo(),
+      onSelect: (dialog) => {
+        const sid = leadID()
+        if (sid) {
+          navigate({ type: "session", sessionID: sid })
+        }
+        dialog.clear()
+      },
+    },
+    {
+      title: "Toggle delegate mode",
+      value: "team.delegate.toggle",
+      category: "Team",
+      hidden: true,
+      enabled: teamInfo()?.role === "lead",
+      slash: {
+        name: "delegate",
+      },
+      onSelect: async (dialog) => {
+        const info = teamInfo()
+        if (!info || info.role !== "lead") {
+          dialog.clear()
+          return
+        }
+        try {
+          const res = await sdk.fetch(`${sdk.url}/team/${info.teamName}/delegate`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-opencode-session": route.sessionID,
+            },
+            body: JSON.stringify({ enabled: !info.delegate }),
+          })
+          if (!res.ok) throw new Error("bad response")
+          toast.show({
+            message: info.delegate ? "Delegate mode disabled" : "Delegate mode enabled — coordination only",
+            variant: "info",
+          })
+        } catch {
+          toast.show({ message: "Failed to toggle delegate mode", variant: "error" })
+        }
+        dialog.clear()
+      },
+    },
   ])
 
   const revertInfo = createMemo(() => session()?.revert)
@@ -1172,6 +1340,14 @@ export function Session() {
               <Show when={permissions().length === 0 && questions().length > 0}>
                 <QuestionPrompt request={questions()[0]} />
               </Show>
+              <Show when={selectedTeammate()}>
+                <box paddingLeft={3} flexShrink={0}>
+                  <text fg={theme.primary}>
+                    Messaging: <span style={{ bold: true }}>@{selectedTeammate()}</span>
+                    <span style={{ fg: theme.textMuted }}> (Shift+Up/Down to change, Esc to deselect)</span>
+                  </text>
+                </box>
+              </Show>
               <Prompt
                 visible={!session()?.parentID && permissions().length === 0 && questions().length === 0}
                 ref={(r) => {
@@ -1183,6 +1359,8 @@ export function Session() {
                   }
                 }}
                 disabled={permissions().length > 0 || questions().length > 0}
+                selectedTeammate={selectedTeammate()}
+                onTeammateMessageSent={() => setSelectedTeammate(null)}
                 onSubmit={() => {
                   toBottom()
                 }}

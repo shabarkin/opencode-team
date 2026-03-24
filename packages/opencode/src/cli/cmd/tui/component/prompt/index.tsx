@@ -45,6 +45,8 @@ export type PromptProps = {
   ref?: (ref: PromptRef) => void
   hint?: JSX.Element
   showPlaceholder?: boolean
+  selectedTeammate?: string | null
+  onTeammateMessageSent?: () => void
 }
 
 export type PromptRef = {
@@ -73,6 +75,16 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const teamBusy = createMemo(() => {
+    const sid = props.sessionID
+    if (!sid) return 0
+    const team = sync.data.team?.[sid]
+    if (!team || team.role !== "lead") return 0
+    return team.members.filter((m) => {
+      if (m.status === "shutdown") return false
+      return ["starting", "running", "cancel_requested", "cancelling", "completing"].includes(m.execution_status)
+    }).length
+  })
   const history = usePromptHistory()
   const stash = usePromptStash()
   const command = useCommandDialog()
@@ -218,7 +230,7 @@ export function Prompt(props: PromptProps) {
         keybind: "session_interrupt",
         category: "Session",
         hidden: true,
-        enabled: status().type !== "idle",
+        enabled: status().type !== "idle" || teamBusy() > 0,
         onSelect: (dialog) => {
           if (autocomplete.visible) return
           if (!input.focused) return
@@ -228,6 +240,21 @@ export function Prompt(props: PromptProps) {
             return
           }
           if (!props.sessionID) return
+
+          if (status().type === "idle" && teamBusy() > 0) {
+            const team = sync.data.team?.[props.sessionID]
+            for (const member of team?.members ?? []) {
+              if (
+                ["starting", "running", "cancel_requested", "cancelling", "completing"].includes(
+                  member.execution_status,
+                )
+              ) {
+                sdk.client.session.abort({ sessionID: member.sessionID }).catch(() => {})
+              }
+            }
+            dialog.clear()
+            return
+          }
 
           setStore("interrupt", store.interrupt + 1)
 
@@ -588,7 +615,26 @@ export function Prompt(props: PromptProps) {
     const currentMode = store.mode
     const variant = local.model.variant.current()
 
-    if (store.mode === "shell") {
+    if (props.selectedTeammate) {
+      const to = props.selectedTeammate
+      try {
+        const res = await sdk.fetch(`${sdk.url}/session/${sessionID}/team-message`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            agent: local.agent.current().name,
+            to,
+            text: inputText,
+          }),
+        })
+        if (!res.ok) {
+          toast.show({ message: `Failed to message @${to}`, variant: "error" })
+        }
+      } catch {
+        toast.show({ message: `Failed to message @${to}`, variant: "error" })
+      }
+      props.onTeammateMessageSent?.()
+    } else if (store.mode === "shell") {
       sdk.client.session.shell({
         sessionID,
         agent: local.agent.current().name,
@@ -1058,7 +1104,21 @@ export function Prompt(props: PromptProps) {
           />
         </box>
         <box flexDirection="row" justifyContent="space-between">
-          <Show when={status().type !== "idle"} fallback={<text />}>
+          <Show
+            when={status().type !== "idle"}
+            fallback={
+              <Show when={teamBusy() > 0} fallback={<text />}>
+                <box flexDirection="row" gap={1} marginLeft={1}>
+                  <Show when={kv.get("animations_enabled", true)} fallback={<text fg={theme.textMuted}>[⋯]</text>}>
+                    <spinner color={spinnerDef().color} frames={spinnerDef().frames} interval={40} />
+                  </Show>
+                  <text fg={theme.textMuted}>
+                    {teamBusy()} teammate{teamBusy() > 1 ? "s" : ""} working
+                  </text>
+                </box>
+              </Show>
+            }
+          >
             <box
               flexDirection="row"
               gap={1}

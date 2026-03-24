@@ -154,6 +154,20 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       }
     }
 
+    async function syncTeam(sessionID: string) {
+      const res = await sdk
+        .fetch(`${sdk.url}/team/by-session/${sessionID}`, {
+          headers: {
+            "x-opencode-session": sessionID,
+          },
+        })
+        .catch(() => undefined)
+      if (!res?.ok) return
+      const data = await res.json().catch(() => undefined)
+      if (!data) return
+      setStore("team", sessionID, reconcile(team(data)))
+    }
+
     async function syncWorkspaces() {
       const result = await sdk.client.experimental.workspace.list().catch(() => undefined)
       if (!result?.data) return
@@ -250,12 +264,19 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           break
 
         case "session.deleted": {
-          const result = Binary.search(store.session, event.properties.info.id, (s) => s.id)
+          const id = event.properties.info.id
+          const result = Binary.search(store.session, id, (s) => s.id)
           if (result.found) {
             setStore(
-              "session",
               produce((draft) => {
-                draft.splice(result.index, 1)
+                draft.session.splice(result.index, 1)
+                delete draft.permission[id]
+                delete draft.question[id]
+                delete draft.todo[id]
+                delete draft.message[id]
+                delete draft.session_status[id]
+                delete draft.session_diff[id]
+                delete draft.team[id]
               }),
             )
           }
@@ -637,27 +658,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           )
           fullSyncedSessions.add(sessionID)
 
-          // Fetch team context for this session (non-blocking)
-          if (!store.team[sessionID]) {
-            fetch(`${sdk.url}/team/by-session/${sessionID}`, {
-              headers: {
-                "x-opencode-session": sessionID,
-              },
-            })
-              .then((r: Response) => r.json())
-              .then((data: any) => {
-                if (!data) return
-                setStore("team", sessionID, {
-                  teamName: data.team.name,
-                  role: data.role,
-                  memberName: data.memberName,
-                  delegate: data.team.delegate,
-                  members: data.team.members ?? [],
-                  tasks: data.tasks ?? [],
-                })
-              })
-              .catch(() => {})
-          }
+          void syncTeam(sessionID)
         },
       },
       workspace: {

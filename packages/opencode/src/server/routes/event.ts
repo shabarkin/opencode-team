@@ -10,6 +10,65 @@ import { Instance } from "@/project/instance"
 
 const log = Log.create({ service: "server" })
 
+export function redact(event: { type: string; properties: Record<string, unknown> }) {
+  if (!event.type.startsWith("team.")) return event
+
+  switch (event.type) {
+    case "team.created": {
+      const team = event.properties.team as { name?: string; members?: unknown[]; delegate?: boolean } | undefined
+      return {
+        type: event.type,
+        properties: {
+          teamName: team?.name,
+          members: team?.members?.length ?? 0,
+          delegate: !!team?.delegate,
+        },
+      }
+    }
+    case "team.member.spawned": {
+      const member = event.properties.member as { name?: string; agent?: string; status?: string } | undefined
+      return {
+        type: event.type,
+        properties: {
+          teamName: event.properties.teamName,
+          memberName: member?.name,
+          agent: member?.agent,
+          status: member?.status,
+        },
+      }
+    }
+    case "team.message":
+      return {
+        type: event.type,
+        properties: { teamName: event.properties.teamName, from: event.properties.from, to: event.properties.to },
+      }
+    case "team.broadcast":
+      return { type: event.type, properties: { teamName: event.properties.teamName, from: event.properties.from } }
+    case "team.task.updated": {
+      const tasks = event.properties.tasks as unknown[] | undefined
+      return { type: event.type, properties: { teamName: event.properties.teamName, count: tasks?.length ?? 0 } }
+    }
+    case "team.plan.approval":
+      return {
+        type: event.type,
+        properties: {
+          teamName: event.properties.teamName,
+          memberName: event.properties.memberName,
+          approved: event.properties.approved,
+        },
+      }
+    case "team.cleaned":
+      return {
+        type: event.type,
+        properties: { teamName: event.properties.teamName, delegate: event.properties.delegate },
+      }
+    case "team.file.conflict":
+      return { type: event.type, properties: { teamName: event.properties.teamName } }
+    default:
+      return event
+  }
+}
+
 export const EventRoutes = lazy(() =>
   new Hono().get(
     "/event",
@@ -54,7 +113,7 @@ export const EventRoutes = lazy(() =>
         }, 10_000)
 
         const unsub = Bus.subscribeAll((event) => {
-          q.push(JSON.stringify(event))
+          q.push(JSON.stringify(redact(event)))
           if (event.type === Bus.InstanceDisposed.type) {
             stop()
           }
