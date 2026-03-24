@@ -84,6 +84,21 @@ const TERMINAL_EXECUTION_STATES = new Set<ExecutionStatusType>([
 ])
 
 const CREATE_LOCK_KEY = () => `team:create:${Instance.project.id}`
+const AUTO_CLEANUP_GRACE = 60_000
+const auto = new Map<string, ReturnType<typeof setTimeout>>()
+
+function autoKey(name: string) {
+  return `${Instance.project.id}:${name}`
+}
+
+function clearAuto(name: string) {
+  const key = autoKey(name)
+  const timer = auto.get(key)
+  if (!timer) return false
+  clearTimeout(timer)
+  auto.delete(key)
+  return true
+}
 
 const MEMBER_TRANSITIONS: Record<MemberStatus, MemberStatus[]> = {
   ready: ["busy", "shutdown_requested", "shutdown", "error"],
@@ -133,30 +148,76 @@ function canTransition<T extends string>(current: T, next: T, map: Record<T, T[]
 }
 
 export namespace Team {
+  export function cancelAutoCleanup(teamName?: string) {
+    if (teamName) return clearAuto(teamName)
+
+    const prefix = `${Instance.project.id}:`
+    let cleared = false
+    for (const [key, timer] of auto) {
+      if (!key.startsWith(prefix)) continue
+      clearTimeout(timer)
+      auto.delete(key)
+      cleared = true
+    }
+    return cleared
+  }
+
   /**
    * Subscribe to member status changes and auto-cleanup teams
    * when all members have reached "shutdown" status.
    * Called once during InstanceBootstrap.
    */
-  export function autoCleanup(): () => void {
-    return Bus.subscribe(TeamEvent.MemberStatusChanged, async (event) => {
+  export function autoCleanup(options?: { grace?: number }): () => void {
+    const grace = options?.grace ?? AUTO_CLEANUP_GRACE
+    const offStatus = Bus.subscribe(TeamEvent.MemberStatusChanged, async (event) => {
       if (event.properties.status !== "shutdown") return
 
       const team = await get(event.properties.teamName)
       if (!team) return
       if (team.members.length === 0) return
       if (team.members.some((m) => m.status !== "shutdown")) return
+      if (auto.has(autoKey(team.name))) return
 
-      log.info("all members shutdown, auto-cleaning team", { teamName: team.name })
-      try {
-        await cleanup(team.name)
-      } catch (err: unknown) {
-        log.warn("auto-cleanup failed", {
-          teamName: team.name,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
+      const cleanupAt = Date.now() + grace
+      auto.set(
+        autoKey(team.name),
+        setTimeout(async () => {
+          auto.delete(autoKey(team.name))
+
+          const next = await get(team.name)
+          if (!next) return
+          if (next.members.length === 0) return
+          if (next.members.some((member) => member.status !== "shutdown")) return
+
+          log.info("auto-cleanup grace elapsed, cleaning team", { teamName: next.name, grace })
+          try {
+            await cleanup(next.name)
+          } catch (err: unknown) {
+            log.warn("auto-cleanup failed", {
+              teamName: next.name,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }, grace),
+      )
+
+      log.info("all members shutdown, scheduling auto-cleanup", { teamName: team.name, grace })
+      await Bus.publish(TeamEvent.AllMembersShutdown, {
+        teamName: team.name,
+        leadSessionID: team.leadSessionID,
+        grace,
+        cleanupAt,
+      })
     })
+
+    const offCleaned = Bus.subscribe(TeamEvent.Cleaned, (event) => {
+      clearAuto(event.properties.teamName)
+    })
+
+    return () => {
+      offStatus()
+      offCleaned()
+    }
   }
 
   /**

@@ -71,25 +71,47 @@ describe("team file tracking", () => {
 
         const team = await Team.get("files-c")
         expect(activeConflicts("files-c", team!)).toEqual([])
-        expect(send).toHaveBeenCalledTimes(2)
-        expect(send).toHaveBeenNthCalledWith(1, {
-          teamName: "files-c",
-          from: "system",
-          to: "c2",
-          text: "[System]: File conflict — c1, c2 edited /tmp/shared-c.ts within 5 minutes. Coordinate to avoid overwriting each other's changes.",
-        })
-        expect(send).toHaveBeenNthCalledWith(2, {
-          teamName: "files-c",
-          from: "system",
-          to: "lead",
-          text: "[System]: File conflict — c1, c2 edited /tmp/shared-c.ts within 5 minutes. Coordinate to avoid overwriting each other's changes.",
-        })
+        expect(send).not.toHaveBeenCalled()
 
         send.mockRestore()
         stop()
         await Team.setMemberStatus("files-c", "c1", "shutdown")
         await Team.setMemberStatus("files-c", "c2", "shutdown")
         await Team.cleanup("files-c")
+      },
+    })
+  })
+
+  test("deduplicates repeated file conflict warnings during cooldown", async () => {
+    await Instance.provide({
+      directory: root,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const stop = initFileTracking()
+        const send = spyOn(TeamMessaging, "send").mockImplementation(async () => {})
+
+        await Team.create({ name: "files-d", leadSessionID: "ses_lead_files_d" })
+        await Team.addMember("files-d", { name: "d1", sessionID: "ses_d1", agent: "general", status: "busy" })
+        await Team.addMember("files-d", { name: "d2", sessionID: "ses_d2", agent: "general", status: "busy" })
+
+        const diff = [{ file: "/tmp/shared-d.ts", before: "", after: "x", additions: 1, deletions: 0 }]
+        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_d1"), diff })
+        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_d2"), diff })
+        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_d1"), diff })
+
+        const conflicts = activeConflicts("files-d")
+        expect(conflicts).toHaveLength(1)
+        expect(conflicts[0]?.file).toBe("/tmp/shared-d.ts")
+        expect(conflicts[0]?.members.toSorted()).toEqual(["d1", "d2"])
+        expect(send).toHaveBeenCalledTimes(3)
+
+        send.mockRestore()
+        stop()
+        await Team.setMemberStatus("files-d", "d1", "shutdown")
+        await Team.setMemberStatus("files-d", "d2", "shutdown")
+        await Team.cleanup("files-d")
       },
     })
   })

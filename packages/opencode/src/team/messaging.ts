@@ -85,7 +85,7 @@ export namespace TeamMessaging {
 
     // Send to all active members except the sender
     const memberTargets = team.members
-      .filter((m) => m.name !== input.from && !closing(m.status))
+      .filter((m) => m.name !== input.from && m.status !== "shutdown")
       .map((m) => ({ name: m.name, sessionID: m.sessionID }))
 
     const targets =
@@ -255,7 +255,7 @@ export namespace TeamMessaging {
       const info = await Team.findBySession(sessionID)
       if (info && info.role === "member") {
         const member = info.team.members.find((m) => m.name === info.memberName)
-        if (closing(member?.status)) return
+        if (member?.status === "shutdown") return
       }
       log.info("auto-waking idle session", { sessionID, from })
       SessionPrompt.loop({ sessionID: SessionID.make(sessionID) })

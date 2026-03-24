@@ -24,9 +24,11 @@ interface FileEdit {
 
 /** In-memory map: team:file → recent editors */
 const edits = new Map<string, FileEdit[]>()
+const warns = new Map<string, number>()
 
 /** Conflict window: edits within this period trigger a warning (5 minutes) */
 const CONFLICT_WINDOW = 5 * 60 * 1000
+const CONFLICT_COOLDOWN = 60_000
 
 function key(teamName: string, file: string): string {
   return `${teamName}:${file}`
@@ -57,14 +59,19 @@ export function initFileTracking(): () => void {
     const now = Date.now()
     const teamName = info.team.name
     const editor = info.memberName
+    const team = await Team.get(teamName)
+    if (!team) return
+    const skip = shutdowns(team)
+    if (skip.has(editor)) return
 
     for (const file of files) {
       const id = key(teamName, file.file)
-      const prev = recent(edits.get(id) ?? [], now)
+      const prev = recent(edits.get(id) ?? [], now).filter((edit) => !skip.has(edit.memberName))
       const members = [...new Set(prev.map((edit) => edit.memberName).filter((name) => name !== editor))]
 
       // Check for conflict: different member edited within window
-      if (members.length > 0) {
+      if (members.length > 0 && now - (warns.get(id) ?? 0) >= CONFLICT_COOLDOWN) {
+        warns.set(id, now)
         log.warn("file conflict detected", {
           teamName,
           filepath: file.file,
@@ -80,8 +87,6 @@ export function initFileTracking(): () => void {
 
         // Notify both teammates and the lead
         const warning = `[System]: File conflict — ${[...members, editor].join(", ")} edited ${file.file} within ${Math.round(CONFLICT_WINDOW / 60000)} minutes. Coordinate to avoid overwriting each other's changes.`
-        const team = await Team.get(teamName)
-        const skip = shutdowns(team)
 
         for (const member of members) {
           if (skip.has(member)) continue
@@ -113,6 +118,7 @@ export function recentEdits(teamName: string): Array<{ file: string; memberName:
     const next = recent(list, now)
     if (next.length === 0) {
       edits.delete(id)
+      warns.delete(id)
       continue
     }
     edits.set(id, next)
@@ -138,6 +144,7 @@ export function activeConflicts(
     const next = recent(list, now)
     if (next.length === 0) {
       edits.delete(id)
+      warns.delete(id)
       continue
     }
     edits.set(id, next)
@@ -153,6 +160,8 @@ export function activeConflicts(
 
 export function removeEdits(teamName: string) {
   for (const id of edits.keys()) {
-    if (id.startsWith(`${teamName}:`)) edits.delete(id)
+    if (!id.startsWith(`${teamName}:`)) continue
+    edits.delete(id)
+    warns.delete(id)
   }
 }

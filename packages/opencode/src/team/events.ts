@@ -181,6 +181,16 @@ export namespace TeamEvent {
     }),
   )
 
+  export const AllMembersShutdown = BusEvent.define(
+    "team.all-members-shutdown",
+    z.object({
+      teamName: z.string(),
+      leadSessionID: z.string(),
+      grace: z.number(),
+      cleanupAt: z.number(),
+    }),
+  )
+
   export const MemberTimeout = BusEvent.define(
     "team.member.timeout",
     z.object({

@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach, spyOn } from "bun:test"
+import { describe, expect, test, spyOn } from "bun:test"
 import path from "path"
 import { Instance } from "../../src/project/instance"
 import { Team, TeamTasks } from "../../src/team"
@@ -24,11 +24,37 @@ import { TeamMessaging } from "../../src/team/messaging"
 import { TeamStatusTool } from "../../src/tool/team-status"
 import { TeamNotepadTool } from "../../src/tool/team-notepad"
 import { Storage } from "../../src/storage/storage"
+import { Bus } from "../../src/bus"
+import { TeamEvent } from "../../src/team/events"
+import { MessageID, PartID, SessionID } from "../../src/session/schema"
+import { ProviderID, ModelID } from "../../src/provider/schema"
 import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
 
 const projectRoot = path.join(__dirname, "../..")
+
+async function seed(sessionID: string, text = "seed") {
+  const messageID = MessageID.ascending()
+  await Session.updateMessage({
+    id: messageID,
+    sessionID: SessionID.make(sessionID),
+    role: "user",
+    agent: "general",
+    model: {
+      providerID: ProviderID.make("openai"),
+      modelID: ModelID.make("gpt-4.1"),
+    },
+    time: { created: Date.now() },
+  })
+  await Session.updatePart({
+    id: PartID.ascending(),
+    messageID,
+    sessionID: SessionID.make(sessionID),
+    type: "text",
+    text,
+  })
+}
 
 describe("Team", () => {
   test("create and get a team", async () => {
@@ -493,15 +519,29 @@ describe("TeamTasks", () => {
 })
 
 describe("Team auto-cleanup", () => {
-  test("auto-cleanup triggers when all members reach shutdown", async () => {
+  test("auto-cleanup waits for grace period and preserves lead access", async () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
         Env.set("ANTHROPIC_API_KEY", "test-key")
       },
       fn: async () => {
-        // Enable auto-cleanup subscriber
-        const unsub = Team.autoCleanup()
+        const events: Array<{ teamName: string; grace: number; cleanupAt: number }> = []
+        const stop = Team.autoCleanup({ grace: 50 })
+        const off = Bus.subscribe(TeamEvent.AllMembersShutdown, (event) => {
+          events.push(event.properties)
+        })
+        const status = await TeamStatusTool.init()
+        const notepad = await TeamNotepadTool.init()
+        const ctx = {
+          sessionID: "ses_lead_ac",
+          messageID: "msg_ac",
+          agent: "general",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => {},
+          ask: async () => {},
+        } as any
 
         await Team.create({ name: "auto-clean-team", leadSessionID: "ses_lead_ac" })
         await Team.addMember("auto-clean-team", {
@@ -516,28 +556,77 @@ describe("Team auto-cleanup", () => {
           agent: "general",
           status: "busy",
         })
+        await TeamNotepad.write("auto-clean-team", "summary", "results ready")
 
-        // Shut down first member — team still has active members
         await Team.setMemberStatus("auto-clean-team", "worker-a", "shutdown")
-
-        // Small delay to let async subscriber process
-        await new Promise((r) => setTimeout(r, 50))
-
-        // Team should still exist because worker-b is active
-        const stillExists = await Team.get("auto-clean-team")
-        expect(stillExists).toBeDefined()
-
-        // Shut down second member — all members now shutdown
         await Team.setMemberStatus("auto-clean-team", "worker-b", "shutdown")
 
-        // Allow async subscriber to process
-        await new Promise((r) => setTimeout(r, 100))
+        await Bun.sleep(20)
 
-        // Team should be auto-cleaned
+        expect(await Team.get("auto-clean-team")).toBeDefined()
+        expect(events).toHaveLength(1)
+        expect(events[0]).toMatchObject({
+          teamName: "auto-clean-team",
+          grace: 50,
+        })
+        expect(events[0]!.cleanupAt).toBeGreaterThanOrEqual(Date.now() - 1000)
+
+        const snap = await status.execute({}, ctx)
+        expect(snap.title).toBe("Team status: auto-clean-team")
+
+        const note = await notepad.execute({ action: "read", key: "summary" }, ctx)
+        expect(note.output).toBe("results ready")
+
+        await Bun.sleep(60)
         const gone = await Team.get("auto-clean-team")
         expect(gone).toBeUndefined()
 
-        unsub()
+        off()
+        stop()
+        Team.cancelAutoCleanup("auto-clean-team")
+      },
+    })
+  })
+
+  test("manual cleanup during grace period cancels pending auto-cleanup", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const stop = Team.autoCleanup({ grace: 100 })
+        const clear = spyOn(globalThis, "clearTimeout")
+
+        await Team.create({ name: "manual-clean-team", leadSessionID: "ses_lead_manual" })
+        await Team.addMember("manual-clean-team", {
+          name: "worker-1",
+          sessionID: "ses_manual_1",
+          agent: "general",
+          status: "busy",
+        })
+        await Team.addMember("manual-clean-team", {
+          name: "worker-2",
+          sessionID: "ses_manual_2",
+          agent: "general",
+          status: "busy",
+        })
+
+        await Team.setMemberStatus("manual-clean-team", "worker-1", "shutdown")
+        await Team.setMemberStatus("manual-clean-team", "worker-2", "shutdown")
+        await Bun.sleep(20)
+
+        expect(await Team.get("manual-clean-team")).toBeDefined()
+
+        await Team.cleanup("manual-clean-team")
+        await Bun.sleep(120)
+
+        expect(await Team.get("manual-clean-team")).toBeUndefined()
+        expect(clear).toHaveBeenCalled()
+
+        clear.mockRestore()
+        stop()
+        Team.cancelAutoCleanup("manual-clean-team")
       },
     })
   })
@@ -549,7 +638,7 @@ describe("Team auto-cleanup", () => {
         Env.set("ANTHROPIC_API_KEY", "test-key")
       },
       fn: async () => {
-        const unsub = Team.autoCleanup()
+        const stop = Team.autoCleanup({ grace: 40 })
 
         await Team.create({ name: "no-clean-team", leadSessionID: "ses_lead_nc" })
         await Team.addMember("no-clean-team", {
@@ -565,20 +654,20 @@ describe("Team auto-cleanup", () => {
           status: "busy",
         })
 
-        // Shut down only one
         await Team.setMemberStatus("no-clean-team", "worker-1", "shutdown")
-        await new Promise((r) => setTimeout(r, 100))
+        await Bun.sleep(60)
 
-        // Team should still exist
         const team = await Team.get("no-clean-team")
         expect(team).toBeDefined()
         expect(team!.members).toHaveLength(2)
 
-        // Manual cleanup
         await Team.setMemberStatus("no-clean-team", "worker-2", "shutdown")
-        await new Promise((r) => setTimeout(r, 100))
+        await Bun.sleep(60)
 
-        unsub()
+        expect(await Team.get("no-clean-team")).toBeUndefined()
+
+        stop()
+        Team.cancelAutoCleanup("no-clean-team")
       },
     })
   })
@@ -590,7 +679,7 @@ describe("Team auto-cleanup", () => {
         Env.set("ANTHROPIC_API_KEY", "test-key")
       },
       fn: async () => {
-        const unsub = Team.autoCleanup()
+        const stop = Team.autoCleanup({ grace: 40 })
 
         await Team.create({ name: "idle-team", leadSessionID: "ses_lead_idle" })
         await Team.addMember("idle-team", {
@@ -600,18 +689,81 @@ describe("Team auto-cleanup", () => {
           status: "busy",
         })
 
-        // Set to idle — should NOT trigger cleanup
         await Team.setMemberStatus("idle-team", "worker-idle", "ready")
-        await new Promise((r) => setTimeout(r, 100))
+        await Bun.sleep(60)
 
         const team = await Team.get("idle-team")
         expect(team).toBeDefined()
 
-        // Manual cleanup
         await Team.setMemberStatus("idle-team", "worker-idle", "shutdown")
-        await new Promise((r) => setTimeout(r, 100))
+        await Bun.sleep(60)
 
-        unsub()
+        expect(await Team.get("idle-team")).toBeUndefined()
+
+        stop()
+        Team.cancelAutoCleanup("idle-team")
+      },
+    })
+  })
+})
+
+describe("Team messaging auto-wake", () => {
+  test("broadcast wakes shutdown-requested members but not shutdown members", async () => {
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const lead = await Session.create({})
+        const first = await Session.create({ parentID: lead.id })
+        const second = await Session.create({ parentID: lead.id })
+        const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "idle" } as any)
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue({} as any)
+
+        await seed(lead.id, "lead")
+        await seed(first.id, "first")
+        await seed(second.id, "second")
+
+        await Team.create({ name: "wake-team", leadSessionID: lead.id })
+        await Team.addMember("wake-team", {
+          name: "worker-a",
+          sessionID: first.id,
+          agent: "general",
+          status: "shutdown_requested",
+        })
+        await Team.addMember("wake-team", {
+          name: "worker-b",
+          sessionID: second.id,
+          agent: "general",
+          status: "shutdown",
+        })
+
+        await TeamMessaging.broadcast({
+          teamName: "wake-team",
+          from: "lead",
+          text: "Immediate freeze",
+        })
+        await Bun.sleep(10)
+
+        expect(loop).toHaveBeenCalledTimes(1)
+        expect(loop).toHaveBeenCalledWith({ sessionID: first.id })
+
+        const msgs = await Session.messages({ sessionID: first.id })
+        const part = msgs.at(-1)?.parts.find((item) => item.type === "text")
+        expect(part?.type).toBe("text")
+        if (part?.type === "text") {
+          expect(part.text).toContain("[Team message from lead]: Immediate freeze")
+        }
+        expect((await Team.get("wake-team"))?.members.find((member) => member.name === "worker-a")?.status).toBe(
+          "shutdown",
+        )
+
+        status.mockRestore()
+        loop.mockRestore()
+        await Team.cleanup("wake-team")
       },
     })
   })
