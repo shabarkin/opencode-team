@@ -2,7 +2,6 @@ import z from "zod"
 import { Tool } from "./tool"
 import { Team, TeamTasks } from "../team"
 import { Inbox } from "../team/inbox"
-import { Session } from "../session"
 
 export const TeamStatusTool = Tool.define("team_status", {
   description:
@@ -23,12 +22,13 @@ export const TeamStatusTool = Tool.define("team_status", {
 
     const tasks = await TeamTasks.list(team.name)
     const now = Date.now()
+    const costs = await Team.cost(team.name)
 
     // Member status table
     const members = await Promise.all(
       team.members.map(async (m) => {
         const unread = await Inbox.unread(team.name, m.name).catch(() => [])
-        const elapsed = Math.round((now - team.created) / 60000)
+        const mins = Math.round((now - (m.started ?? m.updated ?? team.created)) / 60000)
         return [
           `  ${icon(m.status)} ${m.name}`,
           `agent=${m.agent}`,
@@ -37,7 +37,7 @@ export const TeamStatusTool = Tool.define("team_status", {
           m.model ?? "",
           m.planApproval && m.planApproval !== "none" ? `plan=${m.planApproval}` : "",
           unread.length > 0 ? `${unread.length} unread` : "",
-          `${elapsed}m`,
+          `${mins}m`,
         ]
           .filter(Boolean)
           .join(" | ")
@@ -54,8 +54,10 @@ export const TeamStatusTool = Tool.define("team_status", {
     const blocked = tasks.filter((t) => t.status === "blocked").length
     const cancelled = tasks.filter((t) => t.status === "cancelled").length
 
-    // Cost estimation from session messages
-    const cost = await estimateCost(team, ctx)
+    const cost =
+      costs.total.cost > 0
+        ? new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(costs.total.cost)
+        : undefined
 
     const sections = [
       `Team: ${team.name}${team.delegate ? " [DELEGATE MODE]" : ""}`,
@@ -109,40 +111,5 @@ function icon(status: string): string {
       return "E"
     default:
       return "?"
-  }
-}
-
-async function estimateCost(
-  team: { members: Array<{ sessionID: string }>; leadSessionID: string },
-  ctx: { sessionID: any },
-): Promise<string | undefined> {
-  try {
-    const { SessionID } = await import("../session/schema")
-    let total = 0
-
-    // Sum lead session cost
-    const leadMsgs = await Session.messages({ sessionID: SessionID.make(team.leadSessionID) }).catch(() => [])
-    for (const m of leadMsgs) {
-      if (m.info.role === "assistant") {
-        const a = m.info as { cost?: number }
-        if (a.cost) total += a.cost
-      }
-    }
-
-    // Sum member session costs
-    for (const member of team.members) {
-      const msgs = await Session.messages({ sessionID: SessionID.make(member.sessionID) }).catch(() => [])
-      for (const m of msgs) {
-        if (m.info.role === "assistant") {
-          const a = m.info as { cost?: number }
-          if (a.cost) total += a.cost
-        }
-      }
-    }
-
-    if (total === 0) return undefined
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(total)
-  } catch {
-    return undefined
   }
 }

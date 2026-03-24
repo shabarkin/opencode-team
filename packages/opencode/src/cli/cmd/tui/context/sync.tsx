@@ -639,7 +639,11 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
 
           // Fetch team context for this session (non-blocking)
           if (!store.team[sessionID]) {
-            fetch(`${sdk.url}/team/by-session/${sessionID}`)
+            fetch(`${sdk.url}/team/by-session/${sessionID}`, {
+              headers: {
+                "x-opencode-session": sessionID,
+              },
+            })
               .then((r: Response) => r.json())
               .then((data: any) => {
                 if (!data) return

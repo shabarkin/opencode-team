@@ -711,7 +711,7 @@ export const TeamHealthTool = Tool.define("team_health", {
     // Check for stuck teammates (busy > 10 minutes with no status change)
     for (const m of team.members) {
       if (m.status === "busy") {
-        const elapsed = Math.round((now - team.created) / 60000)
+        const elapsed = Math.round((now - (m.started ?? m.updated ?? team.created)) / 60000)
         if (elapsed > 10) {
           issues.push(`STUCK: "${m.name}" has been busy for ${elapsed} minutes`)
         }
@@ -747,7 +747,7 @@ export const TeamHealthTool = Tool.define("team_health", {
     }
 
     // Check for file conflicts
-    const conflicts = activeConflicts()
+    const conflicts = activeConflicts(team.name)
     for (const c of conflicts) {
       issues.push(`CONFLICT: ${c.file} edited by: ${c.members.join(", ")}`)
     }
@@ -835,3 +835,5 @@ export const TeamTools = [
   TeamHealthTool,
   TeamRestartTool,
 ]
+
+export const TEAM_TOOL_IDS = TeamTools.map((tool) => tool.id)

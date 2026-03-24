@@ -274,7 +274,7 @@ export namespace Team {
         throw new Error(`Teammate "${next.name}" already exists in team "${teamName}" (case-insensitive)`)
       if (draft.members.some((m) => m.sessionID === next.sessionID))
         throw new Error(`Session "${next.sessionID}" is already registered in team "${teamName}"`)
-      draft.members.push(next)
+      draft.members.push({ ...next, updated: next.updated ?? Date.now() })
     })
 
     log.info("member added", { teamName, member: next.name, agent: next.agent })
@@ -297,6 +297,7 @@ export namespace Team {
         if (!options?.force && !canTransition(from, status, MEMBER_TRANSITIONS)) return
         if (from === status) return
         member.status = status
+        member.updated = Date.now()
         changed = true
       })
     } catch {
@@ -321,7 +322,11 @@ export namespace Team {
         const from = normalizeMember(member).execution_status ?? "idle"
         if (!options?.force && !canTransition(from, status, EXECUTION_TRANSITIONS)) return
         if (from === status) return
+        const now = Date.now()
         member.execution_status = status
+        member.updated = now
+        if (status === "starting" || status === "running") member.started = now
+        if (TERMINAL_EXECUTION_STATES.has(status)) delete member.started
         changed = true
       })
     } catch {
@@ -536,6 +541,7 @@ export namespace Team {
         agent: input.agent.name,
         status: "busy",
         execution_status: "idle",
+        updated: Date.now(),
         prompt: input.prompt,
         model: label,
         planApproval: input.planApproval ? "pending" : "none",
@@ -846,10 +852,14 @@ export namespace Team {
     }
 
     const { Inbox } = await import("./inbox")
+    const { TeamNotepad } = await import("./notepad")
+    const { removeEdits } = await import("./files")
     await Inbox.removeAll(
       teamName,
       team.members.map((m) => m.name),
     )
+    await TeamNotepad.removeAll(teamName)
+    removeEdits(teamName)
     await Storage.remove(configKey(teamName))
     await Storage.remove(tasksKey(teamName))
 
@@ -947,6 +957,20 @@ export namespace Team {
     let count = 0
 
     for (const team of teams) {
+      const live = team.members.filter((m) => m.status !== "shutdown")
+      try {
+        const { TeamMessaging } = await import("./messaging")
+        for (const member of live) {
+          await TeamMessaging.recoverInbox(team.name, member.name, member.sessionID)
+        }
+        await TeamMessaging.recoverInbox(team.name, "lead", team.leadSessionID)
+      } catch (err: unknown) {
+        log.warn("inbox recovery failed", {
+          teamName: team.name,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      }
+
       const active = team.members.filter((m) => m.status === "busy")
       if (active.length === 0) continue
 
@@ -960,21 +984,6 @@ export namespace Team {
         names.push(member.name)
         count++
       }
-
-      // Recover undelivered inbox messages for interrupted members and the lead
-      try {
-        const { TeamMessaging } = await import("./messaging")
-        for (const member of active) {
-          await TeamMessaging.recoverInbox(team.name, member.name, member.sessionID)
-        }
-        await TeamMessaging.recoverInbox(team.name, "lead", team.leadSessionID)
-      } catch (err: unknown) {
-        log.warn("inbox recovery failed", {
-          teamName: team.name,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      }
-
       try {
         const { Session } = await import("../session")
         const { SessionID, MessageID, PartID } = await import("../session/schema")

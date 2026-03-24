@@ -8,16 +8,29 @@ const log = Log.create({ service: "team.files" })
 
 /** Tracks which team member last edited a file and when */
 interface FileEdit {
+  teamName: string
   memberName: string
   sessionID: string
   timestamp: number
 }
 
-/** In-memory map: filepath → last editor */
-const edits = new Map<string, FileEdit>()
+/** In-memory map: team:file → recent editors */
+const edits = new Map<string, FileEdit[]>()
 
 /** Conflict window: edits within this period trigger a warning (5 minutes) */
 const CONFLICT_WINDOW = 5 * 60 * 1000
+
+function key(teamName: string, file: string): string {
+  return `${teamName}:${file}`
+}
+
+function file(key: string): string {
+  return key.slice(key.indexOf(":") + 1)
+}
+
+function recent(list: FileEdit[], now: number) {
+  return list.filter((edit) => now - edit.timestamp < CONFLICT_WINDOW)
+}
 
 /**
  * Subscribe to session.diff events and detect file conflicts.
@@ -38,33 +51,40 @@ export function initFileTracking(): () => void {
     const editor = info.memberName
 
     for (const file of files) {
-      const prev = edits.get(file.file)
+      const id = key(teamName, file.file)
+      const prev = recent(edits.get(id) ?? [], now)
+      const members = [...new Set(prev.map((edit) => edit.memberName).filter((name) => name !== editor))]
 
       // Check for conflict: different member edited within window
-      if (prev && prev.memberName !== editor && now - prev.timestamp < CONFLICT_WINDOW) {
+      if (members.length > 0) {
         log.warn("file conflict detected", {
           teamName,
           filepath: file.file,
           editor,
-          previous: prev.memberName,
+          previous: members,
         })
 
         await Bus.publish(TeamEvent.FileConflict, {
           teamName,
           filepath: file.file,
-          members: [prev.memberName, editor],
+          members: [...members, editor],
         })
 
         // Notify both teammates and the lead
-        const warning = `[System]: File conflict — both '${prev.memberName}' and '${editor}' edited ${file.file} within ${Math.round(CONFLICT_WINDOW / 60000)} minutes. Coordinate to avoid overwriting each other's changes.`
+        const warning = `[System]: File conflict — ${[...members, editor].join(", ")} edited ${file.file} within ${Math.round(CONFLICT_WINDOW / 60000)} minutes. Coordinate to avoid overwriting each other's changes.`
 
-        await TeamMessaging.send({ teamName, from: "system", to: prev.memberName, text: warning }).catch(() => {})
+        for (const member of members) {
+          await TeamMessaging.send({ teamName, from: "system", to: member, text: warning }).catch(() => {})
+        }
         await TeamMessaging.send({ teamName, from: "system", to: editor, text: warning }).catch(() => {})
         await TeamMessaging.send({ teamName, from: "system", to: "lead", text: warning }).catch(() => {})
       }
 
       // Track this edit
-      edits.set(file.file, { memberName: editor, sessionID, timestamp: now })
+      edits.set(id, [
+        ...prev.filter((edit) => edit.memberName !== editor),
+        { teamName, memberName: editor, sessionID, timestamp: now },
+      ])
     }
   })
 }
@@ -76,10 +96,16 @@ export function initFileTracking(): () => void {
 export function recentEdits(teamName: string): Array<{ file: string; memberName: string; timestamp: number }> {
   const now = Date.now()
   const result: Array<{ file: string; memberName: string; timestamp: number }> = []
-  for (const [file, edit] of edits) {
-    if (now - edit.timestamp < CONFLICT_WINDOW) {
-      result.push({ file, memberName: edit.memberName, timestamp: edit.timestamp })
+  for (const [id, list] of edits) {
+    const next = recent(list, now)
+    if (next.length === 0) {
+      edits.delete(id)
+      continue
     }
+    edits.set(id, next)
+    const edit = next.findLast((edit) => edit.teamName === teamName)
+    if (!edit) continue
+    result.push({ file: file(id), memberName: edit.memberName, timestamp: edit.timestamp })
   }
   return result
 }
@@ -87,18 +113,27 @@ export function recentEdits(teamName: string): Array<{ file: string; memberName:
 /**
  * Get active file conflicts (files edited by multiple members within window).
  */
-export function activeConflicts(): Array<{ file: string; members: string[] }> {
+export function activeConflicts(teamName: string): Array<{ file: string; members: string[] }> {
   const now = Date.now()
-  const byFile = new Map<string, string[]>()
+  const result: Array<{ file: string; members: string[] }> = []
 
-  for (const [file, edit] of edits) {
-    if (now - edit.timestamp >= CONFLICT_WINDOW) continue
-    const existing = byFile.get(file) ?? []
-    if (!existing.includes(edit.memberName)) existing.push(edit.memberName)
-    byFile.set(file, existing)
+  for (const [id, list] of edits) {
+    const next = recent(list, now)
+    if (next.length === 0) {
+      edits.delete(id)
+      continue
+    }
+    edits.set(id, next)
+    const members = [...new Set(next.filter((edit) => edit.teamName === teamName).map((edit) => edit.memberName))]
+    if (members.length < 2) continue
+    result.push({ file: file(id), members })
   }
 
-  return [...byFile.entries()]
-    .filter(([_, members]) => members.length > 1)
-    .map(([file, members]) => ({ file, members }))
+  return result
+}
+
+export function removeEdits(teamName: string) {
+  for (const id of edits.keys()) {
+    if (id.startsWith(`${teamName}:`)) edits.delete(id)
+  }
 }

@@ -32,6 +32,8 @@ export const TeamMemberSchema = z.object({
   agent: z.string(),
   status: MemberStatus,
   execution_status: ExecutionStatus.optional(),
+  updated: z.number().optional(),
+  started: z.number().optional(),
   prompt: z.string().optional(),
   /** Model this teammate is using, in "providerID/modelID" format. */
   model: z.string().optional(),
@@ -48,12 +50,17 @@ export const TeamInfoSchema = z.object({
 })
 export type TeamInfo = z.infer<typeof TeamInfoSchema>
 
-export const TeamMemberPublicSchema = TeamMemberSchema.omit({ prompt: true, sessionID: true })
+export const TeamMemberPublicSchema = TeamMemberSchema.omit({
+  prompt: true,
+  sessionID: true,
+  updated: true,
+  started: true,
+})
 export const TeamInfoPublicSchema = TeamInfoSchema.omit({ leadSessionID: true, members: true }).extend({
   members: z.array(TeamMemberPublicSchema),
 })
 
-export const TeamMemberSessionSchema = TeamMemberSchema.omit({ prompt: true })
+export const TeamMemberSessionSchema = TeamMemberSchema.omit({ prompt: true, updated: true, started: true })
 export const TeamInfoSessionSchema = TeamInfoSchema.omit({ leadSessionID: true, members: true }).extend({
   members: z.array(TeamMemberSessionSchema),
 })

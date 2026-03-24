@@ -11,18 +11,7 @@ import { iife } from "@/util/iife"
 import { defer } from "@/util/defer"
 import { Config } from "../config/config"
 import { Permission } from "@/permission"
-
-const TEAM_TOOLS = [
-  "team_create",
-  "team_spawn",
-  "team_message",
-  "team_broadcast",
-  "team_tasks",
-  "team_claim",
-  "team_approve_plan",
-  "team_shutdown",
-  "team_cleanup",
-] as const
+import { TEAM_TOOL_IDS } from "./team"
 
 const parameters = z.object({
   description: z.string().describe("A short (3-5 words) description of the task"),
@@ -97,7 +86,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
               pattern: "*",
               action: "deny",
             },
-            ...TEAM_TOOLS.map((t) => ({
+            ...TEAM_TOOL_IDS.map((t) => ({
               permission: t,
               pattern: "*",
               action: "deny" as const,
@@ -155,7 +144,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
         tools: {
           todowrite: false,
           todoread: false,
-          ...Object.fromEntries(TEAM_TOOLS.map((t) => [t, false])),
+          ...Object.fromEntries(TEAM_TOOL_IDS.map((t) => [t, false])),
           ...(hasTaskPermission ? {} : { task: false }),
           ...Object.fromEntries((config.experimental?.primary_tools ?? []).map((t) => [t, false])),
         },

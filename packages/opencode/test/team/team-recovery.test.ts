@@ -4,10 +4,35 @@ import fs from "fs/promises"
 import { Instance } from "../../src/project/instance"
 import { Team } from "../../src/team"
 import { Session } from "../../src/session"
+import { Inbox } from "../../src/team/inbox"
 import { Env } from "../../src/env"
 import { Log } from "../../src/util/log"
+import { MessageID, PartID, SessionID } from "../../src/session/schema"
+import { ProviderID, ModelID } from "../../src/provider/schema"
 
 Log.init({ print: false })
+
+async function seed(sessionID: string) {
+  const messageID = MessageID.ascending()
+  await Session.updateMessage({
+    id: messageID,
+    sessionID: SessionID.make(sessionID),
+    role: "user",
+    agent: "general",
+    model: {
+      providerID: ProviderID.make("openai"),
+      modelID: ModelID.make("gpt-4.1"),
+    },
+    time: { created: Date.now() },
+  })
+  await Session.updatePart({
+    id: PartID.ascending(),
+    messageID,
+    sessionID: SessionID.make(sessionID),
+    type: "text",
+    text: "seed",
+  })
+}
 
 /**
  * Tests for Team.recover() — marking active teammates as "ready"
@@ -106,6 +131,68 @@ describe("Team recovery after restart", () => {
           // Cleanup
           await Team.setMemberStatus("recover-skip", "idle-worker", "shutdown")
           await Team.cleanup("recover-skip")
+        },
+      })
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true })
+    }
+  })
+
+  test("recovers unread inboxes for idle members and the lead", async () => {
+    const dir = await fs.mkdtemp(path.join(import.meta.dir, ".tmp-recover-"))
+
+    try {
+      await Instance.provide({
+        directory: dir,
+        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        fn: async () => {
+          const lead = await Session.create({})
+          const member = await Session.create({ parentID: lead.id })
+          await seed(lead.id)
+          await seed(member.id)
+
+          await Team.create({
+            name: "recover-inbox",
+            leadSessionID: lead.id,
+          })
+          await Team.addMember("recover-inbox", {
+            name: "worker",
+            sessionID: member.id,
+            agent: "general",
+            status: "ready",
+            prompt: "watch inbox",
+            planApproval: "none",
+          })
+
+          await Inbox.write("recover-inbox", "worker", {
+            id: "msg_member",
+            from: "lead",
+            text: "member note",
+            timestamp: Date.now(),
+          })
+          await Inbox.write("recover-inbox", "lead", {
+            id: "msg_lead",
+            from: "worker",
+            text: "lead note",
+            timestamp: Date.now(),
+          })
+
+          const result = await Team.recover()
+          expect(result.interrupted).toBe(0)
+
+          const memberMsgs = await Session.messages({ sessionID: member.id })
+          const leadMsgs = await Session.messages({ sessionID: lead.id })
+          expect(
+            memberMsgs.some((msg) =>
+              msg.parts.some((part) => part.type === "text" && part.text.includes("member note")),
+            ),
+          ).toBe(true)
+          expect(
+            leadMsgs.some((msg) => msg.parts.some((part) => part.type === "text" && part.text.includes("lead note"))),
+          ).toBe(true)
+
+          await Team.setMemberStatus("recover-inbox", "worker", "shutdown")
+          await Team.cleanup("recover-inbox")
         },
       })
     } finally {

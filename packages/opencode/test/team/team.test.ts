@@ -9,12 +9,18 @@ import {
   TeamSpawnTool,
   TeamMessageTool,
   TeamBroadcastTool,
+  TeamHealthTool,
   TeamTasksTool,
   TeamClaimTool,
+  TeamRestartTool,
   TeamShutdownTool,
   TeamCleanupTool,
 } from "../../src/tool/team"
 import { Session } from "../../src/session"
+import { TeamNotepad } from "../../src/team/notepad"
+import { TeamStatusTool } from "../../src/tool/team-status"
+import { TeamNotepadTool } from "../../src/tool/team-notepad"
+import { Storage } from "../../src/storage/storage"
 
 Log.init({ print: false })
 
@@ -204,6 +210,25 @@ describe("Team", () => {
 
         unsub()
         await Session.remove(session.id)
+      },
+    })
+  })
+
+  test("cleanup removes team notepad data", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        await Team.create({ name: "notepad-team", leadSessionID: "ses_lead_notepad" })
+        await TeamNotepad.write("notepad-team", "plan", "keep docs current")
+
+        expect(await TeamNotepad.read("notepad-team", "plan")).toBe("keep docs current")
+
+        await Team.cleanup("notepad-team")
+
+        expect(await TeamNotepad.read("notepad-team", "plan")).toBeUndefined()
       },
     })
   })
@@ -669,6 +694,10 @@ describe("Team tool definitions", () => {
           TeamBroadcastTool,
           TeamTasksTool,
           TeamClaimTool,
+          TeamStatusTool,
+          TeamNotepadTool,
+          TeamHealthTool,
+          TeamRestartTool,
           TeamShutdownTool,
           TeamCleanupTool,
         ]
@@ -849,6 +878,49 @@ describe("Team tool definitions", () => {
         expect(result.metadata.count).toBe(2)
 
         await Team.cleanup("tasks-tool-team")
+      },
+    })
+  })
+
+  test("TeamStatusTool uses member timestamps instead of team age", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        await Team.create({ name: "status-tool-team", leadSessionID: "ses_status_lead" })
+        await Team.addMember("status-tool-team", {
+          name: "worker",
+          sessionID: "ses_status_worker",
+          agent: "general",
+          status: "busy",
+        })
+
+        await Storage.update(["team", Instance.project.id, "status-tool-team"], (draft: any) => {
+          draft.created = Date.now() - 60 * 60 * 1000
+          draft.members[0].updated = Date.now() - 30 * 1000
+          draft.members[0].started = Date.now() - 30 * 1000
+        })
+
+        const tool = await TeamStatusTool.init()
+        const result = await tool.execute({}, {
+          sessionID: "ses_status_lead",
+          messageID: "msg_1",
+          agent: "general",
+          abort: new AbortController().signal,
+          messages: [],
+          metadata: () => {},
+          ask: async () => {},
+        } as any)
+
+        const line = result.output.split("\n").find((item) => item.includes("worker") && item.includes("agent=general"))
+
+        expect(line).toBeDefined()
+        expect(line).toMatch(/\| [01]m$/)
+
+        await Team.setMemberStatus("status-tool-team", "worker", "shutdown")
+        await Team.cleanup("status-tool-team")
       },
     })
   })
