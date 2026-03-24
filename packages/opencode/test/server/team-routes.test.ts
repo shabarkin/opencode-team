@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect, spyOn, test } from "bun:test"
 import { generateSpecs } from "hono-openapi"
 import { Server } from "../../src/server/server"
 import { Instance } from "../../src/project/instance"
@@ -110,8 +110,60 @@ describe("team routes", () => {
 
         expect(ok.status).toBe(200)
         const body = await ok.json()
+        expect(body.leadSessionID).toBe(lead)
         expect(body.team.members[0].prompt).toBeUndefined()
         expect(body.team.members[0].sessionID).toBe(member)
+      },
+    })
+  })
+
+  test("steer route rejects non-leads and accepts the lead", async () => {
+    process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const lead = (await Session.create({})).id
+        const member = (await Session.create({ parentID: lead })).id
+        await Team.create({ name: "steer-team", leadSessionID: lead })
+        await Team.addMember("steer-team", {
+          name: "worker-a",
+          sessionID: member,
+          agent: "general",
+          status: "ready",
+        })
+
+        const steer = spyOn(Team, "steer").mockResolvedValue("restart")
+        const app = TeamRoutes()
+        const denied = await app.request("/steer-team/steer", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": member,
+          },
+          body: JSON.stringify({ member: "worker-a", text: "retry this" }),
+        })
+        expect(denied.status).toBe(403)
+        expect(steer).not.toHaveBeenCalled()
+
+        const ok = await app.request("/steer-team/steer", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": lead,
+          },
+          body: JSON.stringify({ member: "worker-a", text: "retry this" }),
+        })
+        expect(ok.status).toBe(200)
+        expect(await ok.json()).toEqual({ ok: true, action: "restart" })
+        expect(steer).toHaveBeenCalledWith({
+          teamName: "steer-team",
+          memberName: "worker-a",
+          text: "retry this",
+        })
+
+        steer.mockRestore()
       },
     })
   })

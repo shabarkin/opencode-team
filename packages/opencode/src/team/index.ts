@@ -790,6 +790,59 @@ export namespace Team {
     })
   }
 
+  export async function restart(input: { teamName: string; memberName: string; text: string }): Promise<void> {
+    const { TeamMessaging } = await import("./messaging")
+
+    const team = await get(input.teamName)
+    if (!team) throw new Error(`Team "${input.teamName}" not found`)
+
+    const member = team.members.find((m) => m.name === input.memberName)
+    if (!member) throw new Error(`Teammate "${input.memberName}" not found`)
+    if (member.status !== "ready" && member.status !== "error") {
+      throw new Error(
+        `Teammate "${input.memberName}" is ${member.status} — can only restart ready or errored teammates.`,
+      )
+    }
+
+    if (member.status === "error") {
+      await transitionMemberStatus(input.teamName, input.memberName, "ready", { force: true })
+    }
+
+    await TeamMessaging.send({
+      teamName: input.teamName,
+      from: "lead",
+      to: input.memberName,
+      text: input.text,
+    })
+  }
+
+  export async function steer(input: {
+    teamName: string
+    memberName: string
+    text: string
+  }): Promise<"restart" | "message"> {
+    const { TeamMessaging } = await import("./messaging")
+
+    const team = await get(input.teamName)
+    if (!team) throw new Error(`Team "${input.teamName}" not found`)
+
+    const member = team.members.find((m) => m.name === input.memberName)
+    if (!member) throw new Error(`Teammate "${input.memberName}" not found`)
+
+    if (member.status === "ready" || member.status === "error") {
+      await restart(input)
+      return "restart"
+    }
+
+    await TeamMessaging.send({
+      teamName: input.teamName,
+      from: "lead",
+      to: input.memberName,
+      text: input.text,
+    })
+    return "message"
+  }
+
   /**
    * Notify the lead that a teammate's loop finished or errored.
    * Uses guard option because the lead may have already sent a shutdown request

@@ -11,6 +11,7 @@ import { useKeybind } from "../../context/keybind"
 import { useDirectory } from "../../context/directory"
 import { useKV } from "../../context/kv"
 import { TodoItem } from "../../component/todo-item"
+import { useRoute } from "../../context/route"
 
 export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const sync = useSync()
@@ -19,6 +20,7 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
   const diff = createMemo(() => sync.data.session_diff[props.sessionID] ?? [])
   const todo = createMemo(() => sync.data.todo[props.sessionID] ?? [])
   const messages = createMemo(() => sync.data.message[props.sessionID] ?? [])
+  const route = useRoute()
 
   const [expanded, setExpanded] = createStore({
     mcp: true,
@@ -112,13 +114,16 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                   <text fg={theme.text}>
                     <b>Team</b>{" "}
                     <span style={{ fg: theme.textMuted }}>
-                      {teamData().teamName} ({teamData().role})
-                      {teamData().delegate ? " [delegate]" : ""}
+                      {teamData().teamName} ({teamData().role}){teamData().delegate ? " [delegate]" : ""}
                     </span>
                   </text>
                   <For each={teamData().members}>
                     {(m) => (
-                      <box flexDirection="row" gap={1}>
+                      <box
+                        flexDirection="row"
+                        gap={1}
+                        onMouseUp={() => route.navigate({ type: "session", sessionID: m.sessionID })}
+                      >
                         <text
                           flexShrink={0}
                           style={{
@@ -133,7 +138,15 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                             )[m.status],
                           }}
                         >
-                          {m.status === "busy" ? "*" : m.status === "ready" ? "o" : m.status === "shutdown" ? "x" : m.status === "error" ? "E" : "!"}
+                          {m.status === "busy"
+                            ? "*"
+                            : m.status === "ready"
+                              ? "o"
+                              : m.status === "shutdown"
+                                ? "x"
+                                : m.status === "error"
+                                  ? "E"
+                                  : "!"}
                         </text>
                         <text fg={theme.text} wrapMode="word">
                           {m.name}{" "}
@@ -146,7 +159,8 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                   </For>
                   <Show when={teamData().tasks.length > 0}>
                     <text fg={theme.textMuted}>
-                      Tasks: {teamData().tasks.filter((t) => t.status === "completed").length}/{teamData().tasks.length} done
+                      Tasks: {teamData().tasks.filter((t) => t.status === "completed").length}/{teamData().tasks.length}{" "}
+                      done
                     </text>
                   </Show>
                 </box>

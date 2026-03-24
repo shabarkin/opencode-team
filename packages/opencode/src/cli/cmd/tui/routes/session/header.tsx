@@ -9,6 +9,8 @@ import { useCommandDialog } from "@tui/component/dialog-command"
 import { useKeybind } from "../../context/keybind"
 import { Flag } from "@/flag/flag"
 import { useTerminalDimensions } from "@opentui/solid"
+import { useDialog } from "../../ui/dialog"
+import { DialogTeamSteer } from "./dialog-team-steer"
 
 const Title = (props: { session: Accessor<Session> }) => {
   const { theme } = useTheme()
@@ -82,9 +84,12 @@ export function Header() {
   const { theme } = useTheme()
   const keybind = useKeybind()
   const command = useCommandDialog()
-  const [hover, setHover] = createSignal<"parent" | "prev" | "next" | null>(null)
+  const dialog = useDialog()
+  const [hover, setHover] = createSignal<"parent" | "prev" | "next" | "steer" | null>(null)
   const dimensions = useTerminalDimensions()
   const narrow = createMemo(() => dimensions().width < 80)
+  const team = createMemo(() => sync.data.team[route.sessionID])
+  const steer = createMemo(() => team()?.role === "member")
 
   return (
     <box flexShrink={0}>
@@ -149,6 +154,16 @@ export function Header() {
                     Next <span style={{ fg: theme.textMuted }}>{keybind.print("session_child_cycle")}</span>
                   </text>
                 </box>
+                <Show when={steer()}>
+                  <box
+                    onMouseOver={() => setHover("steer")}
+                    onMouseOut={() => setHover(null)}
+                    onMouseUp={() => dialog.replace(() => <DialogTeamSteer sessionID={route.sessionID} />)}
+                    backgroundColor={hover() === "steer" ? theme.backgroundElement : theme.backgroundPanel}
+                  >
+                    <text fg={theme.text}>Steer</text>
+                  </box>
+                </Show>
               </box>
             </box>
           </Match>
@@ -167,7 +182,8 @@ export function Header() {
             <Show when={sync.data.team[route.sessionID]}>
               {(teamData) => (
                 <text fg={theme.textMuted} wrapMode="none" flexShrink={0}>
-                  [{teamData().teamName} | {teamData().members.length} members | {teamData().members.filter((m) => m.status === "busy").length} busy]
+                  [{teamData().teamName} | {teamData().members.length} members |{" "}
+                  {teamData().members.filter((m) => m.status === "busy").length} busy]
                 </text>
               )}
             </Show>

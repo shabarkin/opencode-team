@@ -799,16 +799,9 @@ export const TeamRestartTool = Tool.define("team_restart", {
       }
     }
 
-    // Reset error state if needed
-    if (member.status === "error") {
-      await Team.transitionMemberStatus(info.team.name, params.name, "ready", { force: true })
-    }
-
-    // Send the message — autoWake in messaging will start the loop
-    await TeamMessaging.send({
+    await Team.restart({
       teamName: info.team.name,
-      from: "lead",
-      to: params.name,
+      memberName: params.name,
       text: params.message,
     })
 

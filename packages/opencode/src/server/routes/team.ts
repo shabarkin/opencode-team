@@ -18,10 +18,15 @@ import { lazy } from "../../util/lazy"
 import { errors } from "../error"
 
 const Delegate = z.object({ enabled: z.boolean() })
+const TeamSteer = z.object({
+  member: MemberNameSchema,
+  text: z.string(),
+})
 
 const TeamSessionResponse = z.object({
   team: TeamInfoSessionSchema,
   tasks: z.array(TeamTaskSchema),
+  leadSessionID: SessionID.zod,
   role: z.enum(["lead", "member"]),
   memberName: MemberNameSchema.optional(),
 })
@@ -162,6 +167,7 @@ export const TeamRoutes = lazy(() =>
         return c.json({
           team: sessionTeam(result.team),
           tasks: await TeamTasks.list(result.team.name),
+          leadSessionID: SessionID.make(result.team.leadSessionID),
           role: result.role,
           memberName: result.memberName,
         })
@@ -199,6 +205,47 @@ export const TeamRoutes = lazy(() =>
 
         await Team.setDelegate(name, enabled)
         return c.json({ ok: true, delegate: enabled })
+      },
+    )
+    .post(
+      "/:name/steer",
+      describeRoute({
+        summary: "Steer teammate",
+        description: "Send lead instructions to a teammate, restarting them when idle or errored.",
+        operationId: "team.steer",
+        responses: {
+          200: {
+            description: "Teammate steered",
+            content: {
+              "application/json": {
+                schema: resolver(z.object({ ok: z.literal(true), action: z.enum(["restart", "message"]) })),
+              },
+            },
+          },
+          ...errors(403, 404),
+        },
+      }),
+      validator("param", z.object({ name: TeamNameSchema })),
+      validator("json", TeamSteer),
+      async (c) => {
+        const sid = caller(c)
+        if (!sid) return c.json({ error: "Forbidden" }, 403)
+
+        const { name } = c.req.valid("param")
+        const { member, text } = c.req.valid("json")
+        const match = await Team.findBySession(sid)
+        if (!match || match.role !== "lead" || match.team.name !== name) return c.json({ error: "Forbidden" }, 403)
+
+        const team = await Team.get(name)
+        if (!team) return c.json({ error: "Team not found" }, 404)
+        if (!team.members.some((item) => item.name === member)) return c.json({ error: "Teammate not found" }, 404)
+
+        const action = await Team.steer({
+          teamName: name,
+          memberName: member,
+          text,
+        })
+        return c.json({ ok: true as const, action })
       },
     )
     .post(

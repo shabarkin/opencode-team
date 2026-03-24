@@ -10,6 +10,7 @@ import { Inbox } from "./inbox"
 
 const log = Log.create({ service: "team.messaging" })
 const MAX_TEXT = 10 * 1024
+const TEAM_MESSAGE = true
 
 function validateText(text: string) {
   if (text.length <= MAX_TEXT) return
@@ -318,7 +319,11 @@ export namespace TeamMessaging {
       type: "text",
       text: `[Team message from ${fromName}]: ${text}`,
       synthetic: true,
-      ...(inboxMessageId ? { metadata: { inboxMessageId } } : {}),
+      metadata: {
+        teamMessage: TEAM_MESSAGE,
+        teamFrom: fromName,
+        ...(inboxMessageId ? { inboxMessageId } : {}),
+      },
     })
   }
 }

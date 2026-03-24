@@ -81,6 +81,7 @@ export function DialogTeam() {
         if (!data) return
         sync.set("team", route.sessionID, {
           teamName: data.team.name,
+          leadSessionID: data.leadSessionID,
           role: data.role,
           memberName: data.memberName,
           delegate: data.team.delegate,
@@ -166,16 +167,8 @@ export function DialogTeam() {
             onTrigger: () => {
               const info = teamInfo()
               if (!info) return
-              // Find lead session: iterate members looking for the session that has role=lead
-              // Or look up from team data
-              for (const [sid, entry] of Object.entries(sync.data.team)) {
-                const e = entry as any
-                if (e?.teamName === info.teamName && e?.role === "lead") {
-                  dialog.clear()
-                  nav.navigate({ type: "session", sessionID: sid })
-                  return
-                }
-              }
+              dialog.clear()
+              nav.navigate({ type: "session", sessionID: info.leadSessionID })
             },
           },
         ]}

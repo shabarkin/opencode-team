@@ -78,6 +78,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       team: {
         [sessionID: string]: {
           teamName: string
+          leadSessionID: string
           role: "lead" | "member"
           memberName?: string
           delegate?: boolean
@@ -142,10 +143,12 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     })
 
     const sdk = useSDK()
+    const fullSyncedSessions = new Set<string>()
 
     function team(data: any) {
       return {
         teamName: data.team.name,
+        leadSessionID: data.leadSessionID,
         role: data.role,
         memberName: data.memberName,
         delegate: data.team.delegate,
@@ -154,7 +157,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       }
     }
 
-    async function syncTeam(sessionID: string) {
+    async function fetchTeam(sessionID: string) {
       const res = await sdk
         .fetch(`${sdk.url}/team/by-session/${sessionID}`, {
           headers: {
@@ -162,9 +165,22 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           },
         })
         .catch(() => undefined)
-      if (!res?.ok) return
-      const data = await res.json().catch(() => undefined)
-      if (!data) return
+      if (!res?.ok) return undefined
+      return res.json().catch(() => undefined)
+    }
+
+    async function syncTeam(sessionID: string) {
+      const data = await fetchTeam(sessionID)
+      if (data === undefined) return
+      if (data === null) {
+        setStore(
+          "team",
+          produce((draft) => {
+            delete draft[sessionID]
+          }),
+        )
+        return
+      }
       setStore("team", sessionID, reconcile(team(data)))
     }
 
@@ -419,103 +435,11 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         }
       }
 
-      // Team events — handled outside the typed switch since team event types
-      // aren't in the SDK event union yet (they come from BusEvent.define in team/events.ts)
+      // Team events — payloads are SSE-redacted, so refetch open session team state.
       const raw = event as any
       if (typeof raw.type === "string" && raw.type.startsWith("team.")) {
-        switch (raw.type) {
-          case "team.created": {
-            const t = raw.properties.team
-            setStore("team", t.leadSessionID, {
-              teamName: t.name,
-              role: "lead",
-              delegate: t.delegate,
-              members: t.members ?? [],
-              tasks: [],
-            })
-            break
-          }
-          case "team.member.spawned": {
-            const { teamName, member } = raw.properties
-            for (const [sid, entry] of Object.entries(store.team)) {
-              const e = entry as any
-              if (e?.teamName === teamName) {
-                setStore("team", sid, "members", (prev: any[]) => [...(prev ?? []), member])
-              }
-            }
-            setStore("team", member.sessionID, {
-              teamName,
-              role: "member",
-              memberName: member.name,
-              members: [],
-              tasks: [],
-            })
-            break
-          }
-          case "team.member.status": {
-            const { teamName, memberName, status } = raw.properties
-            for (const [sid, entry] of Object.entries(store.team)) {
-              const e = entry as any
-              if (e?.teamName === teamName && e?.members) {
-                const idx = e.members.findIndex((m: any) => m.name === memberName)
-                if (idx >= 0) {
-                  setStore("team", sid, "members", idx, "status", status)
-                }
-              }
-            }
-            break
-          }
-          case "team.member.execution": {
-            const { teamName, memberName, status } = raw.properties
-            for (const [sid, entry] of Object.entries(store.team)) {
-              const e = entry as any
-              if (e?.teamName === teamName && e?.members) {
-                const idx = e.members.findIndex((m: any) => m.name === memberName)
-                if (idx >= 0) {
-                  setStore("team", sid, "members", idx, "execution_status", status)
-                }
-              }
-            }
-            break
-          }
-          case "team.task.updated": {
-            const { teamName, tasks } = raw.properties
-            for (const [sid, entry] of Object.entries(store.team)) {
-              const e = entry as any
-              if (e?.teamName === teamName) {
-                setStore("team", sid, "tasks", reconcile(tasks))
-              }
-            }
-            break
-          }
-          case "team.task.claimed": {
-            const { teamName, taskId, memberName } = raw.properties
-            for (const [sid, entry] of Object.entries(store.team)) {
-              const e = entry as any
-              if (e?.teamName === teamName && e?.tasks) {
-                const idx = e.tasks.findIndex((t: any) => t.id === taskId)
-                if (idx >= 0) {
-                  setStore("team", sid, "tasks", idx, "status", "in_progress")
-                  setStore("team", sid, "tasks", idx, "assignee", memberName)
-                }
-              }
-            }
-            break
-          }
-          case "team.cleaned": {
-            const { teamName } = raw.properties
-            setStore(
-              "team",
-              produce((draft: any) => {
-                for (const [sid, entry] of Object.entries(draft)) {
-                  if ((entry as any)?.teamName === teamName) {
-                    delete draft[sid]
-                  }
-                }
-              }),
-            )
-            break
-          }
+        for (const sessionID of fullSyncedSessions) {
+          void syncTeam(sessionID)
         }
       }
     })
@@ -609,7 +533,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       bootstrap()
     })
 
-    const fullSyncedSessions = new Set<string>()
     const result = {
       data: store,
       set: setStore,

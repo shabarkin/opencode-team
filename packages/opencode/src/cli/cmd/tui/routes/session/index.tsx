@@ -421,9 +421,7 @@ export function Session() {
   function leadID() {
     const info = teamInfo()
     if (!info) return
-    return Object.entries(sync.data.team).find(
-      ([, entry]) => entry?.teamName === info.teamName && entry?.role === "lead",
-    )?.[0]
+    return info.leadSessionID
   }
 
   function teamSessions() {
@@ -1405,6 +1403,33 @@ const MIME_BADGE: Record<string, string> = {
   "application/x-directory": "dir",
 }
 
+function teamPart(part: Part): part is TextPart {
+  if (part.type !== "text") return false
+  if (!part.synthetic || part.ignored) return false
+  const meta = part.metadata as Record<string, unknown> | undefined
+  return meta?.teamMessage === true || typeof meta?.inboxMessageId === "string"
+}
+
+function teamText(part: TextPart) {
+  const meta = part.metadata as Record<string, unknown> | undefined
+  const from = typeof meta?.teamFrom === "string" ? meta.teamFrom : undefined
+  if (from) {
+    const prefix = `[Team message from ${from}]: `
+    return {
+      from,
+      text: part.text.startsWith(prefix) ? part.text.slice(prefix.length) : part.text,
+      title: from === "lead" ? "Team instruction" : "Team message",
+    }
+  }
+
+  const match = part.text.match(/^\[Team message from ([^\]]+)\]:\s*/)
+  return {
+    from: match?.[1],
+    text: match ? part.text.slice(match[0].length) : part.text,
+    title: match?.[1] === "lead" ? "Team instruction" : "Team message",
+  }
+}
+
 function UserMessage(props: {
   message: UserMessage
   parts: Part[]
@@ -1415,8 +1440,13 @@ function UserMessage(props: {
   const ctx = use()
   const local = useLocal()
   const text = createMemo(() => props.parts.flatMap((x) => (x.type === "text" && !x.synthetic ? [x] : []))[0])
+  const team = createMemo(() => props.parts.find(teamPart))
+  const instruction = createMemo(() => {
+    const part = team()
+    if (!part) return
+    return teamText(part)
+  })
   const files = createMemo(() => props.parts.flatMap((x) => (x.type === "file" ? [x] : [])))
-  const sync = useSync()
   const { theme } = useTheme()
   const [hover, setHover] = createSignal(false)
   const queued = createMemo(() => props.pending && props.message.id > props.pending)
@@ -1485,6 +1515,28 @@ function UserMessage(props: {
               <text fg={theme.textMuted}>
                 <span style={{ bg: color(), fg: queuedFg(), bold: true }}> QUEUED </span>
               </text>
+            </Show>
+          </box>
+        </box>
+      </Show>
+      <Show when={!text() && instruction()}>
+        <box
+          id={props.message.id}
+          border={["left"]}
+          borderColor={instruction()?.from === "lead" ? theme.primary : theme.secondary}
+          customBorderChars={SplitBorder.customBorderChars}
+          marginTop={props.index === 0 ? 0 : 1}
+        >
+          <box paddingTop={1} paddingBottom={1} paddingLeft={2} backgroundColor={theme.backgroundPanel} flexShrink={0}>
+            <text fg={instruction()?.from === "lead" ? theme.primary : theme.secondary}>
+              <b>{instruction()?.title}</b>
+              <Show when={instruction()?.from}>
+                <span style={{ fg: theme.textMuted }}> · from {instruction()?.from}</span>
+              </Show>
+            </text>
+            <text fg={theme.text}>{instruction()?.text}</text>
+            <Show when={ctx.showTimestamps()}>
+              <text fg={theme.textMuted}>{Locale.todayTimeOrDateTime(props.message.time.created)}</text>
             </Show>
           </box>
         </box>

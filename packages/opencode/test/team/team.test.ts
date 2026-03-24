@@ -1,4 +1,4 @@
-import { describe, expect, test, beforeEach } from "bun:test"
+import { describe, expect, test, beforeEach, spyOn } from "bun:test"
 import path from "path"
 import { Instance } from "../../src/project/instance"
 import { Team, TeamTasks } from "../../src/team"
@@ -18,6 +18,7 @@ import {
 } from "../../src/tool/team"
 import { Session } from "../../src/session"
 import { TeamNotepad } from "../../src/team/notepad"
+import { TeamMessaging } from "../../src/team/messaging"
 import { TeamStatusTool } from "../../src/tool/team-status"
 import { TeamNotepadTool } from "../../src/tool/team-notepad"
 import { Storage } from "../../src/storage/storage"
@@ -674,6 +675,91 @@ describe("Team constraints", () => {
 
         await Team.cleanup("team-a")
         await Team.cleanup("team-b")
+      },
+    })
+  })
+})
+
+describe("Team steering", () => {
+  test("steer restarts ready or errored teammates and messages busy ones", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const send = spyOn(TeamMessaging, "send").mockImplementation(async () => {})
+
+        await Team.create({ name: "steer-team", leadSessionID: "ses_steer_lead" })
+        await Team.addMember("steer-team", {
+          name: "ready-worker",
+          sessionID: "ses_steer_ready",
+          agent: "general",
+          status: "ready",
+        })
+        await Team.addMember("steer-team", {
+          name: "error-worker",
+          sessionID: "ses_steer_error",
+          agent: "general",
+          status: "error",
+        })
+        await Team.addMember("steer-team", {
+          name: "busy-worker",
+          sessionID: "ses_steer_busy",
+          agent: "general",
+          status: "busy",
+        })
+
+        expect(
+          await Team.steer({
+            teamName: "steer-team",
+            memberName: "ready-worker",
+            text: "continue",
+          }),
+        ).toBe("restart")
+        expect(
+          await Team.steer({
+            teamName: "steer-team",
+            memberName: "error-worker",
+            text: "retry",
+          }),
+        ).toBe("restart")
+        expect(
+          await Team.steer({
+            teamName: "steer-team",
+            memberName: "busy-worker",
+            text: "adjust course",
+          }),
+        ).toBe("message")
+
+        const team = await Team.get("steer-team")
+        expect(team?.members.find((m) => m.name === "ready-worker")?.status).toBe("ready")
+        expect(team?.members.find((m) => m.name === "error-worker")?.status).toBe("ready")
+        expect(team?.members.find((m) => m.name === "busy-worker")?.status).toBe("busy")
+        expect(send).toHaveBeenNthCalledWith(1, {
+          teamName: "steer-team",
+          from: "lead",
+          to: "ready-worker",
+          text: "continue",
+        })
+        expect(send).toHaveBeenNthCalledWith(2, {
+          teamName: "steer-team",
+          from: "lead",
+          to: "error-worker",
+          text: "retry",
+        })
+        expect(send).toHaveBeenNthCalledWith(3, {
+          teamName: "steer-team",
+          from: "lead",
+          to: "busy-worker",
+          text: "adjust course",
+        })
+
+        send.mockRestore()
+        await Team.setMemberStatus("steer-team", "ready-worker", "shutdown")
+        await Team.setMemberStatus("steer-team", "error-worker", "shutdown")
+        await Team.setMemberStatus("steer-team", "busy-worker", "shutdown")
+        await Team.cleanup("steer-team")
       },
     })
   })
