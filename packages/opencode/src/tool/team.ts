@@ -16,6 +16,7 @@ import { TeamNotepadTool } from "./team-notepad"
 export const TeamCreateTool = Tool.define("team_create", {
   description:
     "Create a new agent team for coordinating parallel work across multiple sessions. " +
+    "Use this when the user explicitly asks for a team of agents, teammates, or delegate mode. " +
     "You become the team lead. After creating a team, use team_spawn to add teammates, " +
     "and team_tasks to create a shared task list.",
   parameters: z.object({

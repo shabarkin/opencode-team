@@ -63,6 +63,8 @@ IMPORTANT:
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
+const TEAM_HINT = /\b(team|teams|teammate|teammates|delegate|delegated|delegation|orchestrate|orchestrator)\b/i
+
 export namespace SessionPrompt {
   const log = Log.create({ service: "session.prompt" })
 
@@ -158,6 +160,11 @@ export namespace SessionPrompt {
     ),
   })
   export type PromptInput = z.infer<typeof PromptInput>
+
+  function wantsTeam(parts: PromptInput["parts"]) {
+    if (!Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS) return false
+    return parts.some((part) => part.type === "text" && TEAM_HINT.test(part.text))
+  }
 
   export const prompt = fn(PromptInput, async (input) => {
     const session = await Session.get(input.sessionID)
@@ -995,6 +1002,7 @@ export namespace SessionPrompt {
       id: part.id ? PartID.make(part.id) : PartID.ascending(),
     })
 
+    const team = wantsTeam(input.parts)
     const parts = await Promise.all(
       input.parts.map(async (part): Promise<Draft<MessageV2.Part>[]> => {
         if (part.type === "file") {
@@ -1270,6 +1278,10 @@ export namespace SessionPrompt {
         }
 
         if (part.type === "agent") {
+          const text = team
+            ? ` The above agent is available by exact name \"${part.name}\". The user explicitly asked for an agent team, so prefer team_create/team_spawn over the task tool and pass agent: \"${part.name}\" to team_spawn.`
+            : " Use the above message and context to generate a prompt and call the task tool with subagent: " +
+              part.name
           // Check if this agent would be denied by task permission
           const perm = Permission.evaluate("task", part.name, agent.permission)
           const hint = perm.action === "deny" ? " . Invoked by user; guaranteed to exist." : ""
@@ -1286,10 +1298,7 @@ export namespace SessionPrompt {
               synthetic: true,
               // An extra space is added here. Otherwise the 'Use' gets appended
               // to user's last word; making a combined word
-              text:
-                " Use the above message and context to generate a prompt and call the task tool with subagent: " +
-                part.name +
-                hint,
+              text: text + hint,
             },
           ]
         }
