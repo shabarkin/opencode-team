@@ -117,6 +117,18 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                       {teamData().teamName} ({teamData().role}){teamData().delegate ? " [delegate]" : ""}
                     </span>
                   </text>
+                  <Show when={teamData().role === "member"}>
+                    <box
+                      flexDirection="row"
+                      gap={1}
+                      onMouseUp={() => route.navigate({ type: "session", sessionID: teamData().leadSessionID })}
+                    >
+                      <text fg={theme.primary}>←</text>
+                      <text fg={theme.text}>
+                        Lead <span style={{ fg: theme.textMuted }}>return to main leader</span>
+                      </text>
+                    </box>
+                  </Show>
                   <For each={teamData().members}>
                     {(m) => (
                       <box

@@ -176,6 +176,7 @@ export function Session() {
   })
   const showTimestamps = createMemo(() => timestamps() === "show")
   const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
+  const headerVisible = createMemo(() => showHeader() && (!sidebarVisible() || !wide() || !!session()?.parentID))
 
   createEffect(
     on(
@@ -1214,7 +1215,7 @@ export function Session() {
       <box flexDirection="row">
         <box flexGrow={1} paddingBottom={1} paddingTop={1} paddingLeft={2} paddingRight={2} gap={1}>
           <Show when={session()}>
-            <Show when={showHeader() && (!sidebarVisible() || !wide())}>
+            <Show when={headerVisible()}>
               <Header />
             </Show>
             <scrollbox
