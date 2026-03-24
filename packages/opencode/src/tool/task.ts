@@ -11,7 +11,8 @@ import { iife } from "@/util/iife"
 import { defer } from "@/util/defer"
 import { Config } from "../config/config"
 import { Permission } from "@/permission"
-import { TEAM_TOOL_IDS } from "./team"
+import { Team } from "../team"
+import { TEAM_TOOL_IDS } from "./team-ids"
 
 const parameters = z.object({
   description: z.string().describe("A short (3-5 words) description of the task"),
@@ -65,6 +66,17 @@ export const TaskTool = Tool.define("task", async (ctx) => {
       if (!agent) throw new Error(`Unknown agent type: ${params.subagent_type} is not a valid agent type`)
 
       const hasTaskPermission = agent.permission.some((rule) => rule.permission === "task")
+      const info = await Team.findBySession(ctx.sessionID)
+      const linked =
+        info?.role === "member" && info.memberName
+          ? { parentTeam: info.team.name, parentMember: info.memberName, mode: "task" as const }
+          : await Team.trace(ctx.sessionID).then((item) =>
+              item
+                ? { parentTeam: item.parentTeam, parentMember: item.parentMember, mode: "task" as const }
+                : undefined,
+            )
+      const allowPad = info?.role === "member" && !!info.memberName
+      const tools = TEAM_TOOL_IDS.filter((id) => !allowPad || id !== "team_notepad")
 
       const session = await iife(async () => {
         if (params.task_id) {
@@ -74,7 +86,10 @@ export const TaskTool = Tool.define("task", async (ctx) => {
 
         return await Session.create({
           parentID: ctx.sessionID,
-          title: params.description + ` (@${agent.name} subagent)`,
+          title:
+            params.description +
+            ` (@${agent.name} subagent)` +
+            (linked ? ` [${linked.parentTeam}/${linked.parentMember}]` : ""),
           permission: [
             {
               permission: "todowrite",
@@ -86,11 +101,35 @@ export const TaskTool = Tool.define("task", async (ctx) => {
               pattern: "*",
               action: "deny",
             },
-            ...TEAM_TOOL_IDS.map((t) => ({
+            ...tools.map((t) => ({
               permission: t,
               pattern: "*",
               action: "deny" as const,
             })),
+            ...(allowPad
+              ? [
+                  {
+                    permission: "team_notepad",
+                    pattern: "read",
+                    action: "allow" as const,
+                  },
+                  {
+                    permission: "team_notepad",
+                    pattern: "list",
+                    action: "allow" as const,
+                  },
+                  {
+                    permission: "team_notepad",
+                    pattern: "write",
+                    action: "deny" as const,
+                  },
+                  {
+                    permission: "team_notepad",
+                    pattern: "delete",
+                    action: "deny" as const,
+                  },
+                ]
+              : []),
             ...(hasTaskPermission
               ? []
               : [
@@ -108,6 +147,9 @@ export const TaskTool = Tool.define("task", async (ctx) => {
           ],
         })
       })
+      if (linked) {
+        await Team.setTrace(session.id, linked)
+      }
       const msg = await MessageV2.get({ sessionID: ctx.sessionID, messageID: ctx.messageID })
       if (msg.info.role !== "assistant") throw new Error("Not an assistant message")
 
@@ -131,7 +173,15 @@ export const TaskTool = Tool.define("task", async (ctx) => {
       }
       ctx.abort.addEventListener("abort", cancel)
       using _ = defer(() => ctx.abort.removeEventListener("abort", cancel))
-      const promptParts = await SessionPrompt.resolvePromptParts(params.prompt)
+      const prompt = allowPad
+        ? [
+            `You are working for teammate "${linked!.parentMember}" in team "${linked!.parentTeam}".`,
+            "You cannot message the team directly.",
+            "You may use team_notepad only in read/list mode for team context.",
+            params.prompt,
+          ].join("\n\n")
+        : params.prompt
+      const promptParts = await SessionPrompt.resolvePromptParts(prompt)
 
       const result = await SessionPrompt.prompt({
         messageID,
@@ -144,7 +194,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
         tools: {
           todowrite: false,
           todoread: false,
-          ...Object.fromEntries(TEAM_TOOL_IDS.map((t) => [t, false])),
+          ...Object.fromEntries(tools.map((t) => [t, false])),
           ...(hasTaskPermission ? {} : { task: false }),
           ...Object.fromEntries((config.experimental?.primary_tools ?? []).map((t) => [t, false])),
         },

@@ -4,6 +4,7 @@ import { Global } from "../global"
 import { Instance } from "../project/instance"
 import { Bus } from "../bus"
 import { TeamEvent } from "./events"
+import type { MessagePriority, MessageType } from "./events"
 import path from "path"
 import fs from "fs/promises"
 
@@ -15,6 +16,11 @@ export interface InboxMessage {
   text: string
   timestamp: number
   read: boolean
+  type?: MessageType
+  priority?: MessagePriority
+  threadId?: string
+  replyTo?: string
+  metadata?: Record<string, unknown>
 }
 
 /** Resolve the JSONL file path for an agent's inbox */
@@ -82,15 +88,11 @@ export namespace Inbox {
       .text()
       .catch(() => "")
     const messages = parse(content)
-    const read: InboxMessage[] = []
-    for (const msg of messages) {
-      if (msg.read) continue
-      msg.read = true
-      read.push({ ...msg })
-    }
+    const read = messages.filter((msg) => !msg.read).map((msg) => ({ ...msg, read: true }))
     if (read.length === 0) return []
+    const next = messages.map((msg) => (msg.read ? msg : { ...msg, read: true }))
     // Rewrite entire file with updated read flags
-    await Bun.write(target, messages.map((m) => JSON.stringify(m)).join("\n") + "\n")
+    await Bun.write(target, next.map((msg) => JSON.stringify(msg)).join("\n") + "\n")
     log.info("inbox marked read", { teamName, agentName, count: read.length })
     await Bus.publish(TeamEvent.MessageRead, { teamName, agentName, count: read.length })
     return read

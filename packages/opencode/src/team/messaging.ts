@@ -6,8 +6,9 @@ import { SessionStatus } from "../session/status"
 import { SessionID, MessageID, PartID } from "../session/schema"
 import { ProviderID, ModelID } from "../provider/schema"
 import { Team, TeamEvent } from "./index"
-import { Inbox } from "./inbox"
+import { Inbox, type InboxMessage } from "./inbox"
 import { TeamPolicy } from "./policy"
+import type { MessagePriority, MessageType } from "./events"
 
 const log = Log.create({ service: "team.messaging" })
 const MAX_TEXT = 10 * 1024
@@ -26,6 +27,21 @@ function messageId(): string {
   return `im_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
 }
 
+function priorityText(text: string, priority?: MessagePriority) {
+  if (priority !== "urgent") return text
+  if (text.startsWith("[URGENT]")) return text
+  return `[URGENT] ${text}`
+}
+
+function queue(status?: string, priority?: MessagePriority) {
+  if (status === "paused") return true
+  return status === "busy" && priority === "low"
+}
+
+function threadId(input: { threadId?: string; replyTo?: string }, id: string) {
+  return input.threadId ?? input.replyTo ?? id
+}
+
 export namespace TeamMessaging {
   /**
    * Send a message from one team member to another.
@@ -38,12 +54,16 @@ export namespace TeamMessaging {
     from: string
     to: string
     text: string
-    type?: string
-    priority?: string
+    type?: MessageType
+    priority?: MessagePriority
+    threadId?: string
+    replyTo?: string
+    metadata?: Record<string, unknown>
   }): Promise<void> {
     const policy = await TeamPolicy.messageSending(input)
     if (!policy.allow) throw new Error(policy.reason ?? `Message to "${input.to}" was denied by team policy.`)
-    validateText(policy.text)
+    const text = priorityText(policy.text, input.priority)
+    validateText(text)
     const team = await Team.get(input.teamName)
     if (!team) throw new Error(`Team "${input.teamName}" not found`)
 
@@ -64,15 +84,28 @@ export namespace TeamMessaging {
 
     // Write to inbox (source of truth)
     const inboxId = messageId()
-    await Inbox.write(input.teamName, input.to, {
+    const status = paused ? "paused" : team.members.find((m) => m.name === input.to)?.status
+    const next: Omit<InboxMessage, "read"> = {
       id: inboxId,
       from: input.from,
-      text: policy.text,
+      text,
       timestamp: Date.now(),
+      type: input.type,
+      priority: input.priority,
+      threadId: threadId(input, inboxId),
+      replyTo: input.replyTo,
+      metadata: input.metadata,
+    }
+    await Inbox.write(input.teamName, input.to, {
+      ...next,
     })
 
-    if (!paused) {
-      await injectMessage(targetSessionID, input.from, policy.text, inboxId)
+    if (input.priority === "urgent" && status === "busy") {
+      await Team.cancelMember(input.teamName, input.to).catch(() => false)
+    }
+
+    if (!queue(status, input.priority)) {
+      await injectMessage(targetSessionID, input.from, next)
     }
 
     log.info("message sent", { teamName: input.teamName, from: input.from, to: input.to })
@@ -80,19 +113,30 @@ export namespace TeamMessaging {
       teamName: input.teamName,
       from: input.from,
       to: input.to,
-      text: policy.text,
+      text,
+      type: input.type,
+      priority: input.priority,
+      threadId: next.threadId,
+      replyTo: input.replyTo,
     })
 
     // Auto-wake: if the recipient session is idle, start its prompt loop
     // so the LLM processes the injected message.
-    if (!paused) autoWake(targetSessionID, input.from)
+    if (!queue(status, input.priority)) autoWake(targetSessionID, input.from)
   }
 
   /**
    * Broadcast a message from one member to all other members.
    */
-  export async function broadcast(input: { teamName: string; from: string; text: string }): Promise<void> {
-    validateText(input.text)
+  export async function broadcast(input: {
+    teamName: string
+    from: string
+    text: string
+    type?: MessageType
+    priority?: MessagePriority
+    threadId?: string
+  }): Promise<void> {
+    validateText(priorityText(input.text, input.priority))
     const team = await Team.get(input.teamName)
     if (!team) throw new Error(`Team "${input.teamName}" not found`)
 
@@ -106,52 +150,25 @@ export namespace TeamMessaging {
         ? [{ name: "lead", sessionID: team.leadSessionID }, ...memberTargets]
         : memberTargets
 
-    const errors: Array<{ target: string; phase: string; error: string }> = []
+    const errors: Array<{ target: string; error: string }> = []
+    const root = input.threadId ?? messageId()
     for (const target of targets) {
-      const policy = await TeamPolicy.messageSending({
+      await send({
         teamName: input.teamName,
         from: input.from,
         to: target.name,
         text: input.text,
+        type: input.type,
+        priority: input.priority,
+        threadId: root,
+      }).catch((err) => {
+        const msg = err instanceof Error ? err.message : String(err)
+        log.warn("broadcast delivery failed", { target: target.name, error: msg })
+        errors.push({ target: target.name, error: msg })
       })
-      if (!policy.allow) {
-        errors.push({ target: target.name, phase: "policy", error: policy.reason ?? "Denied by team policy" })
-        continue
-      }
-      validateText(policy.text)
-
-      const inboxId = messageId()
-      const member = team.members.find((item) => item.name === target.name)
-      const paused = member?.status === "paused"
-
-      // Write to inbox (source of truth)
-      const wrote = await Inbox.write(input.teamName, target.name, {
-        id: inboxId,
-        from: input.from,
-        text: policy.text,
-        timestamp: Date.now(),
-      }).then(
-        () => true,
-        (err) => {
-          const msg = err instanceof Error ? err.message : String(err)
-          log.warn("broadcast inbox write failed", { target: target.name, error: msg })
-          errors.push({ target: target.name, phase: "inbox", error: msg })
-          return false
-        },
-      )
-
-      // Only inject if inbox write succeeded — no point delivering a message
-      // that won't survive recovery
-      if (wrote && !paused) {
-        await injectMessage(target.sessionID, input.from, policy.text, inboxId).catch((err) => {
-          const msg = err instanceof Error ? err.message : String(err)
-          log.warn("broadcast inject failed", { target: target.name, error: msg })
-          errors.push({ target: target.name, phase: "inject", error: msg })
-        })
-      }
     }
 
-    const delivered = targets.length - errors.filter((e) => e.phase === "inbox").length
+    const delivered = targets.length - errors.length
     log.info("broadcast sent", {
       teamName: input.teamName,
       from: input.from,
@@ -165,14 +182,10 @@ export namespace TeamMessaging {
       teamName: input.teamName,
       from: input.from,
       text: input.text,
+      type: input.type,
+      priority: input.priority,
+      threadId: root,
     })
-
-    // Auto-wake all idle recipient sessions
-    for (const target of targets) {
-      const member = team.members.find((item) => item.name === target.name)
-      if (member?.status === "paused") continue
-      autoWake(target.sessionID, input.from)
-    }
   }
 
   /**
@@ -213,6 +226,9 @@ export namespace TeamMessaging {
           from: agentName,
           text: `[receipt] ${text}`,
           timestamp: Date.now(),
+          type: "system",
+          priority: "low",
+          threadId: receiptId,
         }).catch((err: unknown) => {
           log.warn("receipt inbox write failed", {
             teamName,
@@ -223,7 +239,13 @@ export namespace TeamMessaging {
 
         const senderMember = team.members.find((item) => item.name === sender)
         if (senderMember?.status !== "paused") {
-          await injectMessage(senderSessionID, agentName, `[receipt] ${text}`, receiptId).catch((err: unknown) => {
+          await injectMessage(senderSessionID, agentName, {
+            id: receiptId,
+            text: `[receipt] ${text}`,
+            type: "system",
+            priority: "low",
+            threadId: receiptId,
+          }).catch((err: unknown) => {
             log.warn("receipt inject failed", {
               teamName,
               sender,
@@ -262,12 +284,23 @@ export namespace TeamMessaging {
     let count = 0
     for (const msg of pending) {
       if (delivered.has(msg.id)) continue
-      await injectMessage(sessionID, msg.from, msg.text, msg.id)
+      await injectMessage(sessionID, msg.from, msg)
       count++
     }
 
     if (count > 0)
       log.info("inbox recovery", { teamName, agentName, reinjected: count, skipped: pending.length - count })
+    return count
+  }
+
+  export async function flush(teamName: string, agentName: string): Promise<number> {
+    const team = await Team.get(teamName)
+    if (!team) return 0
+    const sessionID =
+      agentName === "lead" ? team.leadSessionID : team.members.find((m) => m.name === agentName)?.sessionID
+    if (!sessionID) return 0
+    const count = await recoverInbox(teamName, agentName, sessionID)
+    if (count > 0) autoWake(sessionID, "system")
     return count
   }
 
@@ -337,8 +370,7 @@ export namespace TeamMessaging {
   async function injectMessage(
     sessionID: string,
     fromName: string,
-    text: string,
-    inboxMessageId?: string,
+    message: Pick<InboxMessage, "id" | "text" | "type" | "priority" | "threadId" | "replyTo" | "metadata">,
   ): Promise<void> {
     // Get the session to find the current agent and model
     // Don't limit — we need to find the last user message which may not be the most recent
@@ -368,12 +400,17 @@ export namespace TeamMessaging {
       messageID: msgId,
       sessionID: sid,
       type: "text",
-      text: `[Team message from ${fromName}]: ${text}`,
+      text: `[Team ${message.type ?? "message"} from ${fromName}]: ${message.text}`,
       synthetic: true,
       metadata: {
         teamMessage: TEAM_MESSAGE,
         teamFrom: fromName,
-        ...(inboxMessageId ? { inboxMessageId } : {}),
+        inboxMessageId: message.id,
+        ...(message.type ? { teamType: message.type } : {}),
+        ...(message.priority ? { teamPriority: message.priority } : {}),
+        ...(message.threadId ? { threadId: message.threadId } : {}),
+        ...(message.replyTo ? { replyTo: message.replyTo } : {}),
+        ...(message.metadata ? { teamMetadata: message.metadata } : {}),
       },
     })
   }

@@ -6,6 +6,8 @@ import {
   TeamNameSchema,
   MemberNameSchema,
   CheckpointMode,
+  MessagePriority,
+  MessageType,
   addDelegateRules,
   type TeamTask,
 } from "../team"
@@ -16,6 +18,7 @@ import { Bus } from "../bus"
 import { TeamEvent } from "../team/events"
 import { TeamStatusTool } from "./team-status"
 import { TeamNotepadTool } from "./team-notepad"
+import { TeamDelegateTool } from "./team-delegate"
 import { TeamPolicy } from "../team/policy"
 
 const SHUTDOWN_TIMEOUT = 30_000
@@ -82,6 +85,10 @@ export const TeamCreateTool = Tool.define("team_create", {
           "(team_*, read, glob, grep, list). The lead cannot write, edit, or run bash commands. " +
           "Use this when you want the lead to focus entirely on orchestration.",
       ),
+    max_cost: z
+      .number()
+      .optional()
+      .describe("Optional team-wide budget cap in USD. Default warnings fire at 80% and auto-pause at 100%."),
   }),
   async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
     // Constraint: no nested teams — teammates cannot create teams
@@ -105,6 +112,7 @@ export const TeamCreateTool = Tool.define("team_create", {
       name: params.name,
       leadSessionID: ctx.sessionID,
       delegate: params.delegate,
+      maxCost: params.max_cost,
     })
 
     if (params.tasks?.length) {
@@ -129,12 +137,15 @@ export const TeamCreateTool = Tool.define("team_create", {
       output: [
         `Team "${params.name}" created. You are the lead.`,
         params.delegate ? "DELEGATE MODE: You are restricted to coordination tools only (no write/edit/bash)." : "",
+        params.max_cost ? `Team budget cap: $${params.max_cost.toFixed(2)}.` : "",
         "",
         "Quick reference:",
         "  team_spawn        — Add a teammate (set agent, model, prompt, timeout)",
         "  team_status       — Full team snapshot (members, tasks, costs)",
         "  team_message      — Direct message a teammate (to: 'name')",
+        "  team_reply        — Reply to the latest team message with thread context",
         "  team_broadcast    — Message all teammates",
+        "  team_delegate     — Run a lightweight delegated subagent",
         "  team_tasks        — View/add/complete shared tasks",
         "  team_claim        — Claim a pending task",
         "  team_notepad      — Read/write shared team knowledge",
@@ -149,7 +160,7 @@ export const TeamCreateTool = Tool.define("team_create", {
       ]
         .filter(Boolean)
         .join("\n"),
-      metadata: { teamName: params.name, delegate: !!params.delegate },
+      metadata: { teamName: params.name, delegate: !!params.delegate, maxCost: params.max_cost },
     }
   },
 })
@@ -200,6 +211,10 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
         .number()
         .optional()
         .describe("Maximum execution time in minutes. Teammate is auto-cancelled when exceeded. Default: no limit."),
+      max_cost: z
+        .number()
+        .optional()
+        .describe("Optional per-member cost limit in USD. The teammate is auto-paused when this is exceeded."),
       require_plan_approval: z
         .boolean()
         .optional()
@@ -322,6 +337,7 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
         planApproval: !!params.require_plan_approval,
         checkpoint: params.checkpoint ?? "none",
         timeout: params.timeout,
+        maxCost: params.max_cost,
       })
 
       if (request) {
@@ -344,6 +360,7 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
             ? "Plan approval REQUIRED: teammate is in read-only mode until you approve their plan with team_approve_plan."
             : "",
           (params.checkpoint ?? "none") !== "none" ? `Checkpoint mode enabled: ${params.checkpoint ?? "none"}.` : "",
+          params.max_cost ? `Cost limit: $${params.max_cost.toFixed(2)}.` : "",
           "",
           "The teammate is now working independently in the background.",
           "Messages from the teammate will be delivered automatically when they finish or need help.",
@@ -430,6 +447,14 @@ export const TeamRequestSpawnTool = Tool.define("team_request_spawn", async () =
         from: teamInfo.memberName,
         to: "lead",
         text: `Spawn request ${result.request.id}: please add ${params.agent}${params.name ? ` as "${params.name}"` : ""}. Rationale: ${params.rationale}`,
+        type: "spawn_request",
+        priority: "normal",
+        threadId: result.request.id,
+        metadata: {
+          requestID: result.request.id,
+          agent: params.agent,
+          name: params.name,
+        },
       }).catch(() => {})
 
       return {
@@ -452,6 +477,14 @@ export const TeamMessageTool = Tool.define("team_message", {
   parameters: z.object({
     to: z.string().describe("Name of the recipient teammate, or 'lead' to message the team lead"),
     text: z.string().describe("The message content"),
+    type: MessageType.optional().describe(
+      "Optional message type: question, status, plan, error, result, system, or spawn_request.",
+    ),
+    priority: MessagePriority.optional().describe(
+      "Optional priority. Use urgent for interruptions, low for background context.",
+    ),
+    thread_id: z.string().optional().describe("Optional thread ID for related messages."),
+    reply_to: z.string().optional().describe("Optional inbox message ID this message replies to."),
   }),
   async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
     const teamInfo = await Team.findBySession(ctx.sessionID)
@@ -470,12 +503,68 @@ export const TeamMessageTool = Tool.define("team_message", {
       from: fromName,
       to: params.to,
       text: params.text,
+      type: params.type,
+      priority: params.priority,
+      threadId: params.thread_id,
+      replyTo: params.reply_to,
     })
 
     return {
       title: `Message sent to ${params.to}`,
       output: `Message delivered to "${params.to}".`,
-      metadata: { to: params.to },
+      metadata: { to: params.to, threadId: params.thread_id, replyTo: params.reply_to },
+    }
+  },
+})
+
+export const TeamReplyTool = Tool.define("team_reply", {
+  description:
+    "Reply to the most recent non-receipt team message in your inbox. " +
+    "This automatically fills in the recipient, thread ID, and reply target.",
+  parameters: z.object({
+    text: z.string().describe("Reply content"),
+    type: MessageType.optional().describe("Optional reply type such as result, question, or status."),
+    priority: MessagePriority.optional().describe("Optional reply priority."),
+  }),
+  async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
+    const teamInfo = await Team.findBySession(ctx.sessionID)
+    if (!teamInfo) {
+      return {
+        title: "Error",
+        output: "You are not part of any team.",
+        metadata: {},
+      }
+    }
+
+    const name = teamInfo.role === "lead" ? "lead" : teamInfo.memberName!
+    const { Inbox } = await import("../team/inbox")
+    const last = (await Inbox.all(teamInfo.team.name, name))
+      .filter((item) => !item.text.startsWith("[receipt]"))
+      .findLast(() => true)
+
+    if (!last) {
+      return {
+        title: "Error",
+        output: "No team message found to reply to.",
+        metadata: {},
+      }
+    }
+
+    await TeamMessaging.send({
+      teamName: teamInfo.team.name,
+      from: name,
+      to: last.from,
+      text: params.text,
+      type: params.type,
+      priority: params.priority,
+      threadId: last.threadId ?? last.id,
+      replyTo: last.id,
+    })
+
+    return {
+      title: `Reply sent to ${last.from}`,
+      output: `Reply delivered to "${last.from}" in thread "${last.threadId ?? last.id}".`,
+      metadata: { to: last.from, threadId: last.threadId ?? last.id, replyTo: last.id },
     }
   },
 })
@@ -489,6 +578,9 @@ export const TeamBroadcastTool = Tool.define("team_broadcast", {
     "prefer targeted messages. Good for announcements or shared context updates.",
   parameters: z.object({
     text: z.string().describe("The message to broadcast to all teammates"),
+    type: MessageType.optional().describe("Optional broadcast type."),
+    priority: MessagePriority.optional().describe("Optional broadcast priority."),
+    thread_id: z.string().optional().describe("Optional thread ID for all broadcast copies."),
   }),
   async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
     const teamInfo = await Team.findBySession(ctx.sessionID)
@@ -506,6 +598,9 @@ export const TeamBroadcastTool = Tool.define("team_broadcast", {
       teamName: teamInfo.team.name,
       from: fromName,
       text: params.text,
+      type: params.type,
+      priority: params.priority,
+      threadId: params.thread_id,
     })
 
     return {
@@ -1021,7 +1116,9 @@ export const TeamTools = [
   TeamSpawnTool,
   TeamRequestSpawnTool,
   TeamMessageTool,
+  TeamReplyTool,
   TeamBroadcastTool,
+  TeamDelegateTool,
   TeamTasksTool,
   TeamClaimTool,
   TeamApprovePlanTool,
@@ -1033,4 +1130,4 @@ export const TeamTools = [
   TeamRestartTool,
 ]
 
-export const TEAM_TOOL_IDS = TeamTools.map((tool) => tool.id)
+export { TEAM_TOOL_IDS } from "./team-ids"

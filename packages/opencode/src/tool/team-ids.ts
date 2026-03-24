@@ -1,0 +1,18 @@
+export const TEAM_TOOL_IDS = [
+  "team_create",
+  "team_spawn",
+  "team_request_spawn",
+  "team_message",
+  "team_reply",
+  "team_broadcast",
+  "team_delegate",
+  "team_tasks",
+  "team_claim",
+  "team_approve_plan",
+  "team_shutdown",
+  "team_cleanup",
+  "team_status",
+  "team_notepad",
+  "team_health",
+  "team_restart",
+] as const

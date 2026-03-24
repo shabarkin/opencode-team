@@ -33,6 +33,10 @@ export {
   MemberNameSchema,
   CheckpointMode,
   ExecutionStatus,
+  MessagePriority,
+  MessageType,
+  type MessagePriority as MessagePriorityType,
+  type MessageType as MessageTypeType,
   TeamInfoSchema,
   TeamInfoPublicSchema,
   TeamInfoSessionSchema,
@@ -95,9 +99,30 @@ const TERMINAL_EXECUTION_STATES = new Set<ExecutionStatusType>([
 const CREATE_LOCK_KEY = () => `team:create:${Instance.project.id}`
 const AUTO_CLEANUP_GRACE = 60_000
 const auto = new Map<string, ReturnType<typeof setTimeout>>()
+const budget = new Map<string, number>()
+const watch = new Map<string, ReturnType<typeof setTimeout>>()
 const checkpoint = new Set<string>()
 
 function autoKey(name: string) {
+  return `${Instance.project.id}:${name}`
+}
+
+function budgetKey(name: string) {
+  return `${Instance.project.id}:${name}`
+}
+
+function traceKey(sessionID: string): string[] {
+  return ["team_trace", Instance.project.id, sessionID]
+}
+
+const TraceSchema = z.object({
+  parentTeam: TeamNameSchema,
+  parentMember: MemberNameSchema,
+  mode: z.enum(["task", "delegate"]),
+})
+type Trace = z.infer<typeof TraceSchema>
+
+function watchKey(name: string) {
   return `${Instance.project.id}:${name}`
 }
 
@@ -107,6 +132,15 @@ function clearAuto(name: string) {
   if (!timer) return false
   clearTimeout(timer)
   auto.delete(key)
+  return true
+}
+
+function clearWatch(name: string) {
+  const key = watchKey(name)
+  const timer = watch.get(key)
+  if (!timer) return false
+  clearTimeout(timer)
+  watch.delete(key)
   return true
 }
 
@@ -144,6 +178,8 @@ function normalizeMember(member: TeamMember): TeamMember {
     status,
     execution_status,
     checkpoint: CheckpointMode.safeParse(member.checkpoint).success ? member.checkpoint : "none",
+    activeDelegations: Math.max(0, member.activeDelegations ?? 0),
+    maxCost: typeof member.maxCost === "number" && Number.isFinite(member.maxCost) ? member.maxCost : undefined,
   }
 }
 
@@ -151,6 +187,7 @@ function normalizeTeam(team: TeamInfo): TeamInfo {
   return {
     ...team,
     members: team.members.map(normalizeMember),
+    maxCost: typeof team.maxCost === "number" && Number.isFinite(team.maxCost) ? team.maxCost : undefined,
     pending_spawn_requests: (team.pending_spawn_requests ?? []).map((item) => PendingSpawnRequestSchema.parse(item)),
   }
 }
@@ -287,6 +324,7 @@ export namespace Team {
       name: TeamNameSchema,
       leadSessionID: z.string(),
       delegate: z.boolean().optional(),
+      maxCost: z.number().nonnegative().optional(),
     }),
     async (input) => {
       using _ = await Lock.write(CREATE_LOCK_KEY())
@@ -305,6 +343,7 @@ export namespace Team {
         leadSessionID: input.leadSessionID,
         members: [],
         created: Date.now(),
+        ...(typeof input.maxCost === "number" ? { maxCost: input.maxCost } : {}),
         pending_spawn_requests: [],
         ...(input.delegate ? { delegate: true } : {}),
       }
@@ -411,7 +450,13 @@ export namespace Team {
         executionStatus,
         runtime,
       })
-      await TeamPolicy.checkBudget(teamName)
+      await checkBudget(teamName)
+      const team = await get(teamName)
+      const member = team?.members.find((item) => item.name === memberName)
+      if (member?.status === "ready") {
+        const { TeamMessaging } = await import("./messaging")
+        await TeamMessaging.flush(teamName, memberName)
+      }
     }
     return true
   }
@@ -503,6 +548,37 @@ export namespace Team {
     } catch {
       // Team not found — ignore
     }
+  }
+
+  export async function bumpDelegations(teamName: string, memberName: string, delta: number): Promise<number> {
+    let count = 0
+    try {
+      await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+        const member = draft.members.find((item) => item.name === memberName)
+        if (!member) return
+        count = Math.max(0, (member.activeDelegations ?? 0) + delta)
+        member.activeDelegations = count
+      })
+    } catch {
+      return 0
+    }
+    return count
+  }
+
+  export async function setTrace(sessionID: string, trace: Trace): Promise<void> {
+    await Storage.write(traceKey(sessionID), TraceSchema.parse(trace))
+  }
+
+  export async function trace(sessionID: string): Promise<Trace | undefined> {
+    try {
+      return TraceSchema.parse(await Storage.read<Trace>(traceKey(sessionID)))
+    } catch {
+      return undefined
+    }
+  }
+
+  export async function clearTrace(sessionID: string): Promise<void> {
+    await Storage.remove(traceKey(sessionID)).catch(() => {})
   }
 
   export async function listSpawnRequests(teamName: string): Promise<PendingSpawnRequest[]> {
@@ -687,7 +763,12 @@ export namespace Team {
 
     const result: Record<string, { input: number; output: number; reasoning: number; cost: number }> = {}
 
-    async function sum(name: string, sessionID: string) {
+    const ids = new Set([team.leadSessionID, ...team.members.map((member) => member.sessionID)])
+    const seen = new Map<string, { input: number; output: number; reasoning: number; cost: number }>()
+
+    async function sum(sessionID: string) {
+      const cached = seen.get(sessionID)
+      if (cached) return cached
       const acc = { input: 0, output: 0, reasoning: 0, cost: 0 }
       const msgs = await Session.messages({ sessionID: SessionID.make(sessionID) }).catch(() => [])
       for (const m of msgs) {
@@ -698,11 +779,23 @@ export namespace Team {
         acc.reasoning += a.tokens.reasoning
         acc.cost += a.cost
       }
-      result[name] = acc
+      const kids = await Session.children(SessionID.make(sessionID)).catch(() => [])
+      for (const child of kids) {
+        if (ids.has(child.id)) continue
+        const next = await sum(child.id)
+        acc.input += next.input
+        acc.output += next.output
+        acc.reasoning += next.reasoning
+        acc.cost += next.cost
+      }
+      seen.set(sessionID, acc)
+      return acc
     }
 
-    await sum("lead", team.leadSessionID)
-    await Promise.all(team.members.map((m) => sum(m.name, m.sessionID)))
+    result.lead = await sum(team.leadSessionID)
+    for (const member of team.members) {
+      result[member.name] = await sum(member.sessionID)
+    }
 
     const total = { input: 0, output: 0, reasoning: 0, cost: 0 }
     for (const v of Object.values(result)) {
@@ -731,6 +824,7 @@ export namespace Team {
     planApproval: boolean
     checkpoint: CheckpointModeType
     timeout?: number
+    maxCost?: number
     maxTokens?: number
   }): Promise<{ sessionID: string; label: string }> {
     const { Session } = await import("../session")
@@ -791,6 +885,8 @@ export namespace Team {
         model: label,
         planApproval: input.planApproval ? "pending" : "none",
         checkpoint: input.checkpoint,
+        activeDelegations: 0,
+        maxCost: input.maxCost,
       })
     } catch (err) {
       // Orphaned session cleanup
@@ -868,6 +964,7 @@ export namespace Team {
         ? [
             "Budget constraints:",
             ...(input.timeout ? [`  - Time limit: ${input.timeout} minutes`] : []),
+            ...(input.maxCost ? [`  - Cost limit: $${input.maxCost.toFixed(2)}`] : []),
             ...(input.maxTokens ? [`  - Token budget: ${input.maxTokens} tokens`] : []),
             "",
           ]
@@ -881,6 +978,7 @@ export namespace Team {
       "- team_message: send a message to the lead or another teammate",
       "- team_broadcast: send a message to all teammates",
       "- team_request_spawn: ask the lead to add another specialist when needed",
+      "- team_delegate: run a lightweight child subagent and get the result back privately",
       "- team_tasks: view/add/complete tasks on the shared task list",
       "- team_claim: claim a pending task from the shared task list",
       "- team_notepad: read/write shared team knowledge",
@@ -1196,6 +1294,8 @@ export namespace Team {
     removeEdits(teamName)
     await Storage.remove(configKey(teamName))
     await Storage.remove(tasksKey(teamName))
+    budget.delete(budgetKey(teamName))
+    clearWatch(teamName)
 
     log.info("team cleaned up", { teamName })
     await Bus.publish(TeamEvent.Cleaned, {
@@ -1308,6 +1408,112 @@ export namespace Team {
     }
   }
 
+  export function monitorCosts(options?: { delay?: number }) {
+    const delay = options?.delay ?? 100
+
+    const queue = async (sessionID: string) => {
+      const info = await findBySession(sessionID)
+      const teamName = info?.team.name ?? (await trace(sessionID))?.parentTeam
+      if (!teamName) return
+      clearWatch(teamName)
+      watch.set(
+        watchKey(teamName),
+        setTimeout(() => {
+          watch.delete(watchKey(teamName))
+          checkBudget(teamName).catch((err: unknown) => {
+            log.warn("budget monitor failed", {
+              teamName,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          })
+        }, delay),
+      )
+    }
+
+    const offMessage = Bus.subscribe(MessageV2.Event.Updated, (event) => {
+      if (event.properties.info.role !== "assistant") return
+      void queue(event.properties.info.sessionID)
+    })
+    const offClean = Bus.subscribe(TeamEvent.Cleaned, (event) => {
+      clearWatch(event.properties.teamName)
+    })
+
+    return () => {
+      offMessage()
+      offClean()
+    }
+  }
+
+  export async function checkBudget(teamName: string) {
+    const team = await get(teamName)
+    if (!team) return
+
+    const { TeamMessaging } = await import("./messaging")
+    const costs = await cost(teamName)
+    for (const member of team.members) {
+      if (!member.maxCost) continue
+      if (member.status === "shutdown" || member.status === "shutdown_requested" || member.status === "paused") continue
+      const spend = costs.perMember[member.name]?.cost ?? 0
+      if (spend < member.maxCost) continue
+      await pause({
+        teamName,
+        memberName: member.name,
+        reason: `Cost limit reached ($${spend.toFixed(2)} / $${member.maxCost.toFixed(2)})`,
+      }).catch(() => {})
+      await TeamMessaging.send({
+        teamName,
+        from: "system",
+        to: "lead",
+        text: `Budget pause: "${member.name}" reached $${spend.toFixed(2)} of its $${member.maxCost.toFixed(2)} limit.`,
+        type: "system",
+        priority: "urgent",
+      }).catch(() => {})
+    }
+
+    const hook = await TeamPolicy.checkBudget(teamName)
+    if (hook.action !== "continue") return
+
+    const cap = team.maxCost ?? team.members.reduce((sum, member) => sum + (member.maxCost ?? 0), 0)
+    const key = budgetKey(teamName)
+    if (!cap) {
+      budget.delete(key)
+      return
+    }
+
+    const level = budget.get(key) ?? 0
+    if (costs.total.cost >= cap) {
+      if (level >= 2) return
+      budget.set(key, 2)
+      const text = `Team budget paused all members at $${costs.total.cost.toFixed(2)} / $${cap.toFixed(2)}.`
+      await pauseAll(teamName, text)
+      await TeamMessaging.send({
+        teamName,
+        from: "system",
+        to: "lead",
+        text,
+        type: "system",
+        priority: "urgent",
+      }).catch(() => {})
+      return
+    }
+
+    if (costs.total.cost >= cap * 0.8) {
+      if (level >= 1) return
+      budget.set(key, 1)
+      await TeamMessaging.send({
+        teamName,
+        from: "system",
+        to: "lead",
+        text: `Team budget warning: $${costs.total.cost.toFixed(2)} of $${cap.toFixed(2)} used.`,
+        type: "system",
+        priority: "urgent",
+      }).catch(() => {})
+      return
+    }
+
+    budget.set(key, 0)
+  }
+
   export function checkpoints() {
     return Bus.subscribe(MessageV2.Event.PartUpdated, async (event) => {
       const part = event.properties.part
@@ -1387,6 +1593,12 @@ export namespace Team {
     let count = 0
 
     for (const team of teams) {
+      if (team.members.some((member) => (member.activeDelegations ?? 0) > 0)) {
+        await Storage.update<TeamInfo>(configKey(team.name), (draft) => {
+          draft.members = draft.members.map((member) => ({ ...member, activeDelegations: 0 }))
+        }).catch(() => {})
+      }
+
       const live = team.members.filter((m) => m.status !== "shutdown")
       try {
         const { TeamMessaging } = await import("./messaging")

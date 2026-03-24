@@ -7,6 +7,21 @@ export type MemberStatus = z.infer<typeof MemberStatus>
 export const CheckpointMode = z.enum(["none", "after_each_write", "after_each_tool"])
 export type CheckpointMode = z.infer<typeof CheckpointMode>
 
+export const MessageType = z.enum([
+  "message",
+  "question",
+  "status",
+  "plan",
+  "error",
+  "result",
+  "system",
+  "spawn_request",
+])
+export type MessageType = z.infer<typeof MessageType>
+
+export const MessagePriority = z.enum(["normal", "urgent", "low"])
+export type MessagePriority = z.infer<typeof MessagePriority>
+
 export const ExecutionStatus = z.enum([
   "idle",
   "starting",
@@ -42,6 +57,8 @@ export const TeamMemberSchema = z.object({
   model: z.string().optional(),
   planApproval: z.enum(["none", "pending", "approved", "rejected"]).optional(),
   checkpoint: CheckpointMode.optional(),
+  activeDelegations: z.number().int().nonnegative().optional(),
+  maxCost: z.number().nonnegative().optional(),
 })
 export type TeamMember = z.infer<typeof TeamMemberSchema>
 
@@ -62,6 +79,7 @@ export const TeamInfoSchema = z.object({
   members: z.array(TeamMemberSchema),
   created: z.number(),
   delegate: z.boolean().optional(),
+  maxCost: z.number().nonnegative().optional(),
   pending_spawn_requests: z.array(PendingSpawnRequestSchema).optional(),
 })
 export type TeamInfo = z.infer<typeof TeamInfoSchema>
@@ -132,6 +150,10 @@ export namespace TeamEvent {
       from: z.string(),
       to: z.string(),
       text: z.string(),
+      type: MessageType.optional(),
+      priority: MessagePriority.optional(),
+      threadId: z.string().optional(),
+      replyTo: z.string().optional(),
     }),
   )
 
@@ -141,6 +163,9 @@ export namespace TeamEvent {
       teamName: z.string(),
       from: z.string(),
       text: z.string(),
+      type: MessageType.optional(),
+      priority: MessagePriority.optional(),
+      threadId: z.string().optional(),
     }),
   )
 

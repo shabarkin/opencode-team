@@ -10,11 +10,23 @@ export const TeamNotepadTool = Tool.define("team_notepad", {
     "and decisions that teammates should know. New teammates automatically see " +
     "notepad contents when they are spawned.",
   parameters: z.object({
-    action: z.enum(["read", "write", "list", "delete"]).describe("What to do: read a key, write a key, list all, or delete a key"),
+    action: z
+      .enum(["read", "write", "list", "delete"])
+      .describe("What to do: read a key, write a key, list all, or delete a key"),
     key: z.string().optional().describe("The notepad key (required for read/write/delete)"),
     value: z.string().optional().describe("The value to write (required for write action)"),
   }),
   async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
+    await ctx.ask({
+      permission: "team_notepad",
+      patterns: [params.action],
+      always: [params.action],
+      metadata: {
+        action: params.action,
+        key: params.key,
+      },
+    })
+
     const info = await Team.findBySession(ctx.sessionID)
     if (!info) {
       return { title: "Error", output: "You are not part of any team.", metadata: {} }
@@ -60,7 +72,11 @@ export const TeamNotepadTool = Tool.define("team_notepad", {
           return { title: "Error", output: "Key is required for delete action.", metadata: {} }
         }
         await TeamNotepad.remove(teamName, params.key)
-        return { title: `Notepad deleted: ${params.key}`, output: `Removed "${params.key}" from notepad.`, metadata: {} }
+        return {
+          title: `Notepad deleted: ${params.key}`,
+          output: `Removed "${params.key}" from notepad.`,
+          metadata: {},
+        }
       }
     }
   },
