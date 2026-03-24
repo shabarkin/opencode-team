@@ -22,6 +22,7 @@ import { TeamMessaging } from "../../src/team/messaging"
 import { TeamStatusTool } from "../../src/tool/team-status"
 import { TeamNotepadTool } from "../../src/tool/team-notepad"
 import { Storage } from "../../src/storage/storage"
+import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
 
@@ -964,6 +965,80 @@ describe("Team tool definitions", () => {
         expect(result.metadata.count).toBe(2)
 
         await Team.cleanup("tasks-tool-team")
+      },
+    })
+  })
+
+  test("TeamSpawnTool accepts an exact custom agent display name", async () => {
+    await using tmp = await tmpdir({
+      config: {
+        agent: {
+          security_hunter: {
+            name: "Security Researcher Hunter",
+            description: "Security-focused custom subagent",
+            mode: "subagent",
+          },
+        },
+      },
+    })
+
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        await Team.create({ name: "named-agent-team", leadSessionID: "ses_named_lead" })
+
+        const spawn = spyOn(Team, "spawnMember").mockResolvedValue({
+          sessionID: "ses_named_child",
+          label: "test/model",
+        })
+
+        const tool = await TeamSpawnTool.init()
+        expect(tool.description).toContain("Security Researcher Hunter")
+
+        const result = await tool.execute(
+          {
+            name: "worker",
+            agent: "Security Researcher Hunter",
+            prompt: "Review the plan",
+          },
+          {
+            sessionID: "ses_named_lead" as any,
+            messageID: "msg_named" as any,
+            agent: "build",
+            abort: new AbortController().signal,
+            messages: [
+              {
+                info: {
+                  role: "user",
+                  model: {
+                    providerID: "test",
+                    modelID: "model",
+                  },
+                },
+              },
+            ] as any,
+            metadata: () => {},
+            ask: async () => {},
+          },
+        )
+
+        expect(result.title).toBe("Spawned teammate: worker")
+        expect(spawn).toHaveBeenCalledWith(
+          expect.objectContaining({
+            teamName: "named-agent-team",
+            name: "worker",
+            parentSessionID: "ses_named_lead",
+            agent: expect.objectContaining({
+              name: "Security Researcher Hunter",
+            }),
+          }),
+        )
+
+        spawn.mockRestore()
+        await Team.cleanup("named-agent-team")
       },
     })
   })

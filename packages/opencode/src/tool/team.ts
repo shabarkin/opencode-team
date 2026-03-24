@@ -114,154 +114,166 @@ export const TeamCreateTool = Tool.define("team_create", {
 /**
  * Spawn a new teammate — creates a child session and starts its prompt loop.
  */
-export const TeamSpawnTool = Tool.define("team_spawn", {
-  description:
-    "Spawn a new teammate for the current team. Each teammate runs in its own session " +
-    "with its own context window. Specify the agent type, a name, and a prompt describing " +
-    "what this teammate should work on. You can optionally assign a different model to each " +
-    "teammate (e.g. use Gemini for research and Claude for implementation). " +
-    "SUBAGENT RELAY: If subagents are used, they CANNOT communicate with the team directly; " +
-    "teammates are responsible for relaying any relevant findings.",
-  parameters: z.object({
-    name: MemberNameSchema.describe("Unique name for this teammate, e.g. 'security-reviewer', 'frontend-impl'"),
-    agent: z.string().optional().describe("Agent type to use (e.g. 'explore', 'general'). Defaults to 'general'."),
-    model: z
-      .string()
-      .optional()
-      .describe(
-        "Model to use for this teammate in 'provider/model' format, e.g. 'anthropic/claude-sonnet-4-20250514', " +
-          "'google/gemini-2.5-pro', 'openai/gpt-4.1'. Must be a model available in your configured providers " +
-          "(the same models shown by /models). If omitted, inherits the agent's default or the lead's current model.",
-      ),
-    prompt: z.string().describe("Initial instructions for the teammate — what they should work on"),
-    claim_task: z.string().optional().describe("Task ID to auto-claim for this teammate"),
-    timeout: z
-      .number()
-      .optional()
-      .describe("Maximum execution time in minutes. Teammate is auto-cancelled when exceeded. Default: no limit."),
-    require_plan_approval: z
-      .boolean()
-      .optional()
-      .describe(
-        "If true, the teammate starts in read-only plan mode. " +
-          "They can read/search but cannot write/edit/bash until the lead approves their plan. " +
-          "The teammate should research, then send their plan to the lead via team_message. " +
-          "The lead can then use team_approve_plan to grant write access.",
-      ),
-  }),
-  async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
-    // Reserve "lead" — it's used as a routing keyword in messaging
-    if (params.name === "lead") {
-      return {
-        title: "Error",
-        output: `Name "lead" is reserved. Choose a different name for this teammate.`,
-        metadata: {},
-      }
-    }
+export const TeamSpawnTool = Tool.define("team_spawn", async () => {
+  const agents = (await Agent.list())
+    .filter((item) => item.mode !== "primary" && item.hidden !== true)
+    .toSorted((a, b) => a.name.localeCompare(b.name))
+  const names = agents.map((item) => item.name)
 
-    // Constraint: only the lead can spawn — teammates cannot spawn (no nesting)
-    const teamInfo = await Team.findBySession(ctx.sessionID)
-    if (!teamInfo) {
-      return {
-        title: "Error",
-        output: "You are not the lead of any team. Create a team first with team_create.",
-        metadata: {},
-      }
-    }
-    if (teamInfo.role === "member") {
-      return {
-        title: "Error",
-        output: "Teammates cannot spawn other teammates. Only the team lead can spawn new members.",
-        metadata: {},
-      }
-    }
-    const teamName = teamInfo.team.name
-
-    // Resolve agent
-    const agentName = params.agent ?? "general"
-    const agent = await Agent.get(agentName)
-    if (!agent) {
-      return {
-        title: "Error",
-        output: `Agent "${agentName}" not found. Available agents: ${(await Agent.list()).map((a) => a.name).join(", ")}`,
-        metadata: {},
-      }
-    }
-
-    // Resolve the model for this teammate early — fail fast before creating session.
-    // Priority: explicit params.model > agent.model > lead's current model > default
-    const model = await (async () => {
-      // 1. Explicit model param — parse and validate against configured providers
-      if (params.model) {
-        const parsed = Provider.parseModel(params.model)
-        try {
-          await Provider.getModel(parsed.providerID, parsed.modelID)
-        } catch (e: unknown) {
-          if (Provider.ModelNotFoundError.isInstance(e)) {
-            const suggestions = e.data.suggestions?.length ? ` Did you mean: ${e.data.suggestions.join(", ")}?` : ""
-            return { error: `Model not found: ${params.model}.${suggestions}` } as const
-          }
-          throw e
+  return {
+    description:
+      "Spawn a new teammate for the current team. Each teammate runs in its own session " +
+      "with its own context window. Specify the agent type, a name, and a prompt describing " +
+      "what this teammate should work on. You can optionally assign a different model to each " +
+      "teammate (e.g. use Gemini for research and Claude for implementation). " +
+      "Use the exact configured agent name. " +
+      `Available agent types: ${names.join(", ")}. ` +
+      "SUBAGENT RELAY: If subagents are used, they CANNOT communicate with the team directly; " +
+      "teammates are responsible for relaying any relevant findings.",
+    parameters: z.object({
+      name: MemberNameSchema.describe("Unique name for this teammate, e.g. 'security-reviewer', 'frontend-impl'"),
+      agent: z
+        .string()
+        .optional()
+        .describe(`Exact agent name to use. Available: ${names.join(", ")}. Defaults to 'general'.`),
+      model: z
+        .string()
+        .optional()
+        .describe(
+          "Model to use for this teammate in 'provider/model' format, e.g. 'anthropic/claude-sonnet-4-20250514', " +
+            "'google/gemini-2.5-pro', 'openai/gpt-4.1'. Must be a model available in your configured providers " +
+            "(the same models shown by /models). If omitted, inherits the agent's default or the lead's current model.",
+        ),
+      prompt: z.string().describe("Initial instructions for the teammate — what they should work on"),
+      claim_task: z.string().optional().describe("Task ID to auto-claim for this teammate"),
+      timeout: z
+        .number()
+        .optional()
+        .describe("Maximum execution time in minutes. Teammate is auto-cancelled when exceeded. Default: no limit."),
+      require_plan_approval: z
+        .boolean()
+        .optional()
+        .describe(
+          "If true, the teammate starts in read-only plan mode. " +
+            "They can read/search but cannot write/edit/bash until the lead approves their plan. " +
+            "The teammate should research, then send their plan to the lead via team_message. " +
+            "The lead can then use team_approve_plan to grant write access.",
+        ),
+    }),
+    async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
+      // Reserve "lead" — it's used as a routing keyword in messaging
+      if (params.name === "lead") {
+        return {
+          title: "Error",
+          output: `Name "lead" is reserved. Choose a different name for this teammate.`,
+          metadata: {},
         }
-        return parsed
       }
-      // 2. Agent's configured model
-      if (agent.model) return agent.model
-      // 3. Lead's current model (from the last user message in the lead's session)
-      const lastUser = ctx.messages.findLast((m) => m.info.role === "user")
-      if (lastUser) {
-        const info = lastUser.info as { model: { providerID: string; modelID: string } }
-        return info.model
+
+      // Constraint: only the lead can spawn — teammates cannot spawn (no nesting)
+      const teamInfo = await Team.findBySession(ctx.sessionID)
+      if (!teamInfo) {
+        return {
+          title: "Error",
+          output: "You are not the lead of any team. Create a team first with team_create.",
+          metadata: {},
+        }
       }
-      // 4. Global default model
-      return await Provider.defaultModel()
-    })()
-
-    // Bail out if model resolution failed
-    if ("error" in model) {
-      return {
-        title: "Error",
-        output: model.error,
-        metadata: {},
+      if (teamInfo.role === "member") {
+        return {
+          title: "Error",
+          output: "Teammates cannot spawn other teammates. Only the team lead can spawn new members.",
+          metadata: {},
+        }
       }
-    }
+      const teamName = teamInfo.team.name
 
-    const spawned = await Team.spawnMember({
-      teamName,
-      name: params.name,
-      parentSessionID: ctx.sessionID,
-      agent,
-      model,
-      prompt: params.prompt,
-      claimTask: params.claim_task,
-      planApproval: !!params.require_plan_approval,
-      timeout: params.timeout,
-    })
+      // Resolve agent
+      const agentName = params.agent ?? "general"
+      const agent = await Agent.get(agentName)
+      if (!agent || agent.mode === "primary" || agent.hidden === true) {
+        return {
+          title: "Error",
+          output: `Agent "${agentName}" not found. Available agents: ${names.join(", ")}`,
+          metadata: {},
+        }
+      }
 
-    return {
-      title: `Spawned teammate: ${params.name}`,
-      output: [
-        `Teammate "${params.name}" spawned with agent "${agentName}" using model ${spawned.label}.`,
-        `Session ID: ${spawned.sessionID}`,
-        params.claim_task ? `Auto-claimed task: ${params.claim_task}` : "",
-        params.require_plan_approval
-          ? "Plan approval REQUIRED: teammate is in read-only mode until you approve their plan with team_approve_plan."
-          : "",
-        "",
-        "The teammate is now working independently in the background.",
-        "Messages from the teammate will be delivered automatically when they finish or need help.",
-      ]
-        .filter(Boolean)
-        .join("\n"),
-      metadata: {
+      // Resolve the model for this teammate early — fail fast before creating session.
+      // Priority: explicit params.model > agent.model > lead's current model > default
+      const model = await (async () => {
+        // 1. Explicit model param — parse and validate against configured providers
+        if (params.model) {
+          const parsed = Provider.parseModel(params.model)
+          try {
+            await Provider.getModel(parsed.providerID, parsed.modelID)
+          } catch (e: unknown) {
+            if (Provider.ModelNotFoundError.isInstance(e)) {
+              const suggestions = e.data.suggestions?.length ? ` Did you mean: ${e.data.suggestions.join(", ")}?` : ""
+              return { error: `Model not found: ${params.model}.${suggestions}` } as const
+            }
+            throw e
+          }
+          return parsed
+        }
+        // 2. Agent's configured model
+        if (agent.model) return agent.model
+        // 3. Lead's current model (from the last user message in the lead's session)
+        const lastUser = ctx.messages.findLast((m) => m.info.role === "user")
+        if (lastUser) {
+          const info = lastUser.info as { model: { providerID: string; modelID: string } }
+          return info.model
+        }
+        // 4. Global default model
+        return await Provider.defaultModel()
+      })()
+
+      // Bail out if model resolution failed
+      if ("error" in model) {
+        return {
+          title: "Error",
+          output: model.error,
+          metadata: {},
+        }
+      }
+
+      const spawned = await Team.spawnMember({
         teamName,
-        memberName: params.name,
-        sessionID: spawned.sessionID,
-        model: spawned.label,
-        planApproval: params.require_plan_approval,
-      },
-    }
-  },
+        name: params.name,
+        parentSessionID: ctx.sessionID,
+        agent,
+        model,
+        prompt: params.prompt,
+        claimTask: params.claim_task,
+        planApproval: !!params.require_plan_approval,
+        timeout: params.timeout,
+      })
+
+      return {
+        title: `Spawned teammate: ${params.name}`,
+        output: [
+          `Teammate "${params.name}" spawned with agent "${agentName}" using model ${spawned.label}.`,
+          `Session ID: ${spawned.sessionID}`,
+          params.claim_task ? `Auto-claimed task: ${params.claim_task}` : "",
+          params.require_plan_approval
+            ? "Plan approval REQUIRED: teammate is in read-only mode until you approve their plan with team_approve_plan."
+            : "",
+          "",
+          "The teammate is now working independently in the background.",
+          "Messages from the teammate will be delivered automatically when they finish or need help.",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        metadata: {
+          teamName,
+          memberName: params.name,
+          sessionID: spawned.sessionID,
+          model: spawned.label,
+          planApproval: params.require_plan_approval,
+        },
+      }
+    },
+  }
 })
 
 /**

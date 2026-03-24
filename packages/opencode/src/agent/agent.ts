@@ -252,7 +252,12 @@ export namespace Agent {
   })
 
   export async function get(agent: string) {
-    return state().then((x) => x[agent])
+    return state().then((x) => {
+      if (x[agent]) return x[agent]
+      const match = Object.values(x).filter((item) => item.name === agent)
+      if (match.length === 1) return match[0]
+      return undefined as unknown as (typeof x)[string]
+    })
   }
 
   export async function list() {

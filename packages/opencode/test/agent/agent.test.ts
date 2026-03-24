@@ -425,6 +425,33 @@ test("Agent.get returns undefined for non-existent agent", async () => {
   })
 })
 
+test("Agent.get resolves an exact custom display name", async () => {
+  await using tmp = await tmpdir({
+    config: {
+      agent: {
+        security_hunter: {
+          name: "Security Researcher Hunter",
+          description: "Security-focused custom subagent",
+          mode: "subagent",
+        },
+      },
+    },
+  })
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const byKey = await Agent.get("security_hunter")
+      const byName = await Agent.get("Security Researcher Hunter")
+
+      expect(byKey).toBeDefined()
+      expect(byName).toBeDefined()
+      expect(byName?.name).toBe("Security Researcher Hunter")
+      expect(byName?.description).toBe("Security-focused custom subagent")
+      expect(byName?.mode).toBe("subagent")
+    },
+  })
+})
+
 test("default permission includes doom_loop and external_directory as ask", async () => {
   await using tmp = await tmpdir()
   await Instance.provide({
