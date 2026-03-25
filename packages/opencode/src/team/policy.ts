@@ -109,7 +109,7 @@ export namespace TeamPolicy {
     const member = team?.members.find((item) => item.name === input.memberName)
     if (!team || !member) return { allow: true }
 
-    const scope = TeamScope.merge(team.scope, member.scope)
+    const scope = TeamScope.withDefaults(TeamScope.merge(team.scope, member.scope))
     if (!scope.path_excludes?.length && !scope.path_includes?.length) return { allow: true }
 
     const session = await Session.get(SessionID.make(member.sessionID)).catch(() => undefined)
@@ -132,7 +132,7 @@ export namespace TeamPolicy {
     const member = team?.members.find((item) => item.name === input.memberName)
     if (!team || !member) return { allow: true }
 
-    const scope = TeamScope.merge(team.scope, member.scope)
+    const scope = TeamScope.withDefaults(TeamScope.merge(team.scope, member.scope))
     if (!scope.bash_allowlist?.length) return { allow: true }
     return TeamScope.checkBashCommand(input.command, scope)
   }

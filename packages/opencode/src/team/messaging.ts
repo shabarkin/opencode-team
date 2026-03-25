@@ -48,6 +48,11 @@ function queue(status?: string, priority?: MessagePriority) {
   return status === "busy" && priority === "low"
 }
 
+function shouldInject(type?: MessageType, priority?: MessagePriority) {
+  if (type === "system" && priority === "low") return false
+  return true
+}
+
 function threadId(input: { threadId?: string; replyTo?: string }, id: string) {
   return input.threadId ?? input.replyTo ?? id
 }
@@ -145,7 +150,7 @@ export namespace TeamMessaging {
       await Team.cancelMember(input.teamName, input.to).catch(() => false)
     }
 
-    if (!queue(status, input.priority)) {
+    if (!queue(status, input.priority) && shouldInject(input.type, input.priority)) {
       await deliver(input.teamName, input.to, targetSessionID, input.from, { ...next, read: false })
     }
 
@@ -163,7 +168,8 @@ export namespace TeamMessaging {
 
     // Auto-wake: if the recipient session is idle, start its prompt loop
     // so the LLM processes the injected message.
-    if (!queue(status, input.priority)) autoWake(targetSessionID, input.from)
+    if (!queue(status, input.priority) && shouldInject(input.type, input.priority))
+      autoWake(targetSessionID, input.from)
   }
 
   /**
@@ -239,6 +245,10 @@ export namespace TeamMessaging {
     const read = await Inbox.markRead(teamName, agentName)
     if (read.length === 0) return 0
 
+    const team = await Team.get(teamName)
+    if (!team) return read.length
+    if (!team.receipts) return read.length
+
     // Group by sender for batched receipts
     const bySender = new Map<string, number>()
     for (const msg of read) {
@@ -246,7 +256,6 @@ export namespace TeamMessaging {
     }
 
     // Send a receipt to each distinct sender
-    const team = await Team.get(teamName)
     if (team) {
       for (const [sender, count] of bySender) {
         // Find sender's session
@@ -279,7 +288,7 @@ export namespace TeamMessaging {
         })
 
         const senderMember = team.members.find((item) => item.name === sender)
-        if (senderMember?.status !== "paused") {
+        if (senderMember?.status !== "paused" && shouldInject("system", "low")) {
           await deliver(teamName, sender, senderSessionID, agentName, {
             id: receiptId,
             from: agentName,

@@ -18,6 +18,7 @@ export const TeamShutdownAllTool = Tool.define("team_shutdown_all", {
     const live = team?.members.filter((member) => member.status !== "shutdown") ?? []
     if (params.force) {
       await Team.forceShutdownAll(info.team.name, params.reason)
+      await Team.setTeamPhase(info.team.name, "delivery")
       return {
         title: "Shutdown requested for all teammates",
         output: `Force shutdown applied to ${live.length} teammate(s).`,
@@ -41,6 +42,8 @@ export const TeamShutdownAllTool = Tool.define("team_shutdown_all", {
         blocked.push(`${member.name}: ${result.reason ?? "blocked by policy"}`)
       }
     }
+
+    await Team.setTeamPhase(info.team.name, "delivery")
 
     return {
       title: "Shutdown requested for all teammates",

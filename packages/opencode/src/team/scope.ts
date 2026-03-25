@@ -2,6 +2,8 @@ import path from "path"
 import { Wildcard } from "../util/wildcard"
 import type { TeamScope as Scope } from "./events"
 
+export const DEFAULT_EXCLUDES = [".ananke/**", ".claude/**", ".opencode/**", ".git/**", "node_modules/**"]
+
 function norm(input: string) {
   return input.replaceAll("\\", "/")
 }
@@ -19,6 +21,13 @@ function match(file: string, rule: string, cwd: string) {
 }
 
 export namespace TeamScope {
+  export function withDefaults(scope?: Scope): Scope {
+    return {
+      ...(scope ?? {}),
+      path_excludes: [...new Set([...DEFAULT_EXCLUDES, ...(scope?.path_excludes ?? [])])],
+    }
+  }
+
   /**
    * Member scope narrows includes and bash rules, while excludes accumulate.
    */

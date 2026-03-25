@@ -8,6 +8,7 @@ import { Session } from "../../src/session"
 import { SessionPrompt } from "../../src/session/prompt"
 import { Team } from "../../src/team"
 import { TEAM_TOOL_IDS } from "../../src/tool/team"
+import { TeamCollectTool } from "../../src/tool/team-collect"
 import {
   TeamApprovePlanTool,
   TeamBroadcastTool,
@@ -44,6 +45,7 @@ const ALL_TEAM_TOOL_IDS = [
   TeamInboxTool.id,
   TeamSubmitResultTool.id,
   TeamWaitTool.id,
+  TeamCollectTool.id,
   TeamTasksTool.id,
   TeamClaimTool.id,
   TeamApprovePlanTool.id,

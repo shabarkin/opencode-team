@@ -9,6 +9,7 @@ export const TEAM_TOOL_IDS = [
   "team_inbox",
   "team_submit_result",
   "team_wait",
+  "team_collect",
   "team_tasks",
   "team_claim",
   "team_approve_plan",

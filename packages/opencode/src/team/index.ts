@@ -13,8 +13,12 @@ import {
   MemberStatus as MemberStatusSchema,
   CheckpointMode,
   ExecutionStatus,
+  EvidenceTier,
+  OutputFormat,
   ResultStatusSchema,
   SubmittedResultSchema,
+  TeamMode,
+  TeamPhaseLevel,
   TeamScopeSchema,
   TeamErrorKind,
   MemberPhase,
@@ -27,6 +31,9 @@ import {
   type TeamTask,
   type MemberStatus,
   type CheckpointMode as CheckpointModeType,
+  type OutputFormat as OutputFormatType,
+  type TeamMode as TeamModeType,
+  type TeamPhaseLevel as TeamPhaseLevelType,
   type TeamScope as TeamScopeType,
   type TeamErrorKind as TeamErrorKindType,
   type MemberPhase as MemberPhaseType,
@@ -43,8 +50,12 @@ export {
   MemberNameSchema,
   CheckpointMode,
   ExecutionStatus,
+  EvidenceTier,
+  OutputFormat,
   ResultStatusSchema,
   SubmittedResultSchema,
+  TeamMode,
+  TeamPhaseLevel,
   TeamScopeSchema,
   TeamErrorKind,
   MemberPhase,
@@ -119,6 +130,7 @@ const auto = new Map<string, ReturnType<typeof setTimeout>>()
 const budget = new Map<string, number>()
 const watch = new Map<string, ReturnType<typeof setTimeout>>()
 const checkpoint = new Set<string>()
+const cleaning = new Set<string>()
 
 function autoKey(name: string) {
   return `${Instance.project.id}:${name}`
@@ -333,10 +345,15 @@ function normalizeMember(member: TeamMember): TeamMember {
     worktreePath: typeof member.worktreePath === "string" ? member.worktreePath : undefined,
     worktreeBranch: typeof member.worktreeBranch === "string" ? member.worktreeBranch : undefined,
     scope: TeamScopeSchema.safeParse(member.scope).success ? member.scope : undefined,
+    mode: TeamMode.safeParse(member.mode).success ? member.mode : "mixed",
     phase: MemberPhase.safeParse(member.phase).success ? member.phase : undefined,
     last_result_at:
       typeof member.last_result_at === "number" && Number.isFinite(member.last_result_at)
         ? member.last_result_at
+        : undefined,
+    result_deadline:
+      typeof member.result_deadline === "number" && Number.isFinite(member.result_deadline)
+        ? member.result_deadline
         : undefined,
     error_kind: TeamErrorKind.safeParse(member.error_kind).success ? member.error_kind : undefined,
   }
@@ -347,7 +364,11 @@ function normalizeTeam(team: TeamInfo): TeamInfo {
     ...team,
     members: team.members.map(normalizeMember),
     maxCost: typeof team.maxCost === "number" && Number.isFinite(team.maxCost) ? team.maxCost : undefined,
+    receipts: typeof team.receipts === "boolean" ? team.receipts : false,
     scope: TeamScopeSchema.safeParse(team.scope).success ? team.scope : undefined,
+    team_phase: TeamPhaseLevel.safeParse(team.team_phase).success ? team.team_phase : undefined,
+    delivered: typeof team.delivered === "boolean" ? team.delivered : false,
+    output_format: OutputFormat.safeParse(team.output_format).success ? team.output_format : "free",
     pending_spawn_requests: (team.pending_spawn_requests ?? []).map((item) => PendingSpawnRequestSchema.parse(item)),
   }
 }
@@ -509,6 +530,10 @@ export namespace Team {
       leadSessionID: z.string(),
       delegate: z.boolean().optional(),
       maxCost: z.number().nonnegative().optional(),
+      receipts: z.boolean().optional(),
+      output_format: OutputFormat.optional(),
+      team_phase: TeamPhaseLevel.optional(),
+      delivered: z.boolean().optional(),
     }),
     async (input) => {
       using _ = await Lock.write(CREATE_LOCK_KEY())
@@ -527,9 +552,13 @@ export namespace Team {
         leadSessionID: input.leadSessionID,
         members: [],
         created: Date.now(),
+        receipts: input.receipts ?? false,
+        output_format: input.output_format ?? "free",
+        delivered: input.delivered ?? false,
         ...(typeof input.maxCost === "number" ? { maxCost: input.maxCost } : {}),
         pending_spawn_requests: [],
         ...(input.delegate ? { delegate: true } : {}),
+        ...(input.team_phase ? { team_phase: input.team_phase } : {}),
       }
 
       await Storage.write(configKey(input.name), team)
@@ -751,6 +780,33 @@ export namespace Team {
         if (!member) return
         member.phase = phase
         member.updated = Date.now()
+      })
+    } catch {
+      // Team not found — ignore
+    }
+  }
+
+  export async function setTeamPhase(teamName: string, phase: TeamPhaseLevelType): Promise<void> {
+    let previous: TeamPhaseLevelType | undefined
+    let changed = false
+    try {
+      await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+        previous = TeamPhaseLevel.safeParse(draft.team_phase).success ? draft.team_phase : undefined
+        if (previous === phase) return
+        draft.team_phase = phase
+        changed = true
+      })
+    } catch {
+      return
+    }
+    if (!changed) return
+    await Bus.publish(TeamEvent.TeamPhaseChanged, { teamName, phase, previous })
+  }
+
+  export async function setDelivered(teamName: string, delivered: boolean): Promise<void> {
+    try {
+      await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+        draft.delivered = delivered
       })
     } catch {
       // Team not found — ignore
@@ -1068,6 +1124,8 @@ export namespace Team {
     maxCost?: number
     maxTokens?: number
     scope?: TeamScopeType
+    mode?: TeamModeType
+    resultDeadline?: number
   }): Promise<{ sessionID: string; label: string }> {
     const { Session } = await import("../session")
     const { SessionPrompt } = await import("../session/prompt")
@@ -1089,7 +1147,7 @@ export namespace Team {
       throw new Error(spawn.reason ?? `Spawning teammate "${input.name}" was denied by team policy.`)
     }
 
-    const scope = TeamScope.merge(team.scope, input.scope)
+    const scope = TeamScope.withDefaults(TeamScope.merge(team.scope, input.scope))
     const { TeamWorktree } = await import("./worktree")
     const tree = await TeamWorktree.create({
       repoDir: Inst.directory,
@@ -1114,6 +1172,11 @@ export namespace Team {
       { permission: "team_approve_plan", pattern: "*", action: "deny" },
     ]
     rules.push(...scopeRules(scope, tree?.path ?? Inst.directory))
+    if (input.mode === "research") {
+      rules.push(
+        ...WRITE_TOOLS.map((tool) => ({ permission: tool, pattern: "*:research-mode", action: "deny" as const })),
+      )
+    }
     if (input.planApproval) {
       // Pattern "*:plan-approval" is intentionally NOT "*" — PermissionNext.disabled() only
       // strips tools with pattern "*", so these remain visible to the model but are denied at
@@ -1157,7 +1220,9 @@ export namespace Team {
         maxCost: input.maxCost,
         worktreePath: tree?.path,
         worktreeBranch: tree?.branch,
-        scope: input.scope,
+        scope,
+        mode: input.mode ?? "mixed",
+        result_deadline: input.resultDeadline,
       })
     } catch (err) {
       // Orphaned session cleanup
@@ -1206,6 +1271,24 @@ export namespace Team {
             "",
           ]
         : []
+
+    const modeInstructions =
+      input.mode === "research"
+        ? [
+            "",
+            "RESEARCH MODE: You are read-only.",
+            "Do not write files, edit code, or run bash commands. Focus on investigation and reporting.",
+            "",
+          ]
+        : []
+
+    const deadlineInstructions = input.resultDeadline
+      ? [
+          "",
+          `RESULT DEADLINE: You must submit your final structured result within ${input.resultDeadline} minute(s) using team_submit_result.`,
+          "",
+        ]
+      : []
 
     const skillContext = input.agent.skills?.length
       ? [
@@ -1270,12 +1353,14 @@ export namespace Team {
       "Only the team lead can manage the team structure.",
       ...skillContext,
       ...planInstructions,
+      ...modeInstructions,
       ...checkpointInstructions,
+      ...deadlineInstructions,
       ...peerList,
       ...taskSummary,
       ...budgetInfo,
       ...(notepadCtx ? [notepadCtx] : []),
-      "When you finish a task, prefer team_submit_result to send a structured report to the lead.",
+      "You MUST use team_submit_result to send a structured report to the lead when you finish. This is REQUIRED.",
       "Use team_message for follow-ups, questions, and coordination that are not final task results.",
       "You can message any teammate by name — not just the lead. Coordinate directly with peers when useful.",
       "",
@@ -1342,6 +1427,37 @@ export namespace Team {
           text: `I was automatically timed out after ${input.timeout} minutes. Review my session (${session.id}) for partial results.`,
         }).catch(() => {})
       }, timeoutMs)
+    }
+
+    if (input.resultDeadline) {
+      const deadlineMs = input.resultDeadline * 60 * 1000
+      const warnAt = Math.max(deadlineMs - 5 * 60_000, deadlineMs * 0.75)
+
+      setTimeout(async () => {
+        const member = (await get(input.teamName))?.members.find((item) => item.name === input.name)
+        if (!member || member.status === "shutdown" || member.last_result_at) return
+        const { TeamMessaging } = await import("./messaging")
+        await TeamMessaging.send({
+          teamName: input.teamName,
+          from: "system",
+          to: input.name,
+          text: "DEADLINE WARNING: Submit your result NOW using team_submit_result.",
+          priority: "urgent",
+        }).catch(() => {})
+      }, warnAt)
+
+      setTimeout(async () => {
+        const member = (await get(input.teamName))?.members.find((item) => item.name === input.name)
+        if (!member || member.status === "shutdown" || member.last_result_at) return
+        const { TeamMessaging } = await import("./messaging")
+        await TeamMessaging.send({
+          teamName: input.teamName,
+          from: "system",
+          to: "lead",
+          text: `DEADLINE EXPIRED: "${input.name}" did not submit within ${input.resultDeadline} min.`,
+          priority: "urgent",
+        }).catch(() => {})
+      }, deadlineMs)
     }
 
     Promise.resolve()
@@ -1644,45 +1760,55 @@ export namespace Team {
    * (e.g. restoring lead session permissions).
    */
   export async function cleanup(teamName: string): Promise<void> {
-    const team = await get(teamName)
-    if (!team) throw new Error(`Team "${teamName}" not found`)
-
-    const alive = team.members.filter((m) => m.status !== "shutdown")
-    if (alive.length > 0) {
-      throw new Error(
-        `Cannot clean up team "${teamName}": ${alive.length} non-shutdown member(s): ${alive.map((m) => m.name).join(", ")}. Shut them down first.`,
-      )
+    const key = `${Instance.project.id}:${teamName}`
+    if (cleaning.has(key)) {
+      throw new Error(`Team "${teamName}" cleanup already in progress.`)
     }
+    cleaning.add(key)
 
-    const { Inbox } = await import("./inbox")
-    const { TeamNotepad } = await import("./notepad")
-    const { removeEdits } = await import("./files")
-    const { TeamWorktree } = await import("./worktree")
-    await Inbox.removeAll(
-      teamName,
-      team.members.map((m) => m.name),
-    )
-    await TeamNotepad.removeAll(teamName)
-    removeEdits(teamName)
-    await Storage.remove(configKey(teamName))
-    await Storage.remove(tasksKey(teamName))
-    await TeamWorktree.removeAll({
-      repoDir: await leadDir(team.leadSessionID),
-      entries: team.members.flatMap((member) =>
-        member.worktreePath && member.worktreeBranch
-          ? [{ worktreePath: member.worktreePath, branch: member.worktreeBranch }]
-          : [],
-      ),
-    })
-    budget.delete(budgetKey(teamName))
-    clearWatch(teamName)
+    try {
+      const team = await get(teamName)
+      if (!team) throw new Error(`Team "${teamName}" not found`)
 
-    log.info("team cleaned up", { teamName })
-    await Bus.publish(TeamEvent.Cleaned, {
-      teamName,
-      leadSessionID: team.leadSessionID,
-      delegate: !!team.delegate,
-    })
+      const alive = team.members.filter((m) => m.status !== "shutdown")
+      if (alive.length > 0) {
+        throw new Error(
+          `Cannot clean up team "${teamName}": ${alive.length} non-shutdown member(s): ${alive.map((m) => m.name).join(", ")}. Shut them down first.`,
+        )
+      }
+
+      const { Inbox } = await import("./inbox")
+      const { TeamNotepad } = await import("./notepad")
+      const { removeEdits } = await import("./files")
+      const { TeamWorktree } = await import("./worktree")
+      await Inbox.removeAll(
+        teamName,
+        team.members.map((m) => m.name),
+      )
+      await TeamNotepad.removeAll(teamName)
+      removeEdits(teamName)
+      await Storage.remove(configKey(teamName))
+      await Storage.remove(tasksKey(teamName))
+      await TeamWorktree.removeAll({
+        repoDir: await leadDir(team.leadSessionID),
+        entries: team.members.flatMap((member) =>
+          member.worktreePath && member.worktreeBranch
+            ? [{ worktreePath: member.worktreePath, branch: member.worktreeBranch }]
+            : [],
+        ),
+      })
+      budget.delete(budgetKey(teamName))
+      clearWatch(teamName)
+
+      log.info("team cleaned up", { teamName })
+      await Bus.publish(TeamEvent.Cleaned, {
+        teamName,
+        leadSessionID: team.leadSessionID,
+        delegate: !!team.delegate,
+      })
+    } finally {
+      cleaning.delete(key)
+    }
   }
 
   async function interrupt(teamName: string, memberName: string, keep: boolean): Promise<boolean> {

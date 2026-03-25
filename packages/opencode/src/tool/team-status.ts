@@ -72,6 +72,9 @@ export const TeamStatusTool = Tool.define("team_status", {
     const sections = [
       `Team: ${team.name}${team.delegate ? " [DELEGATE MODE]" : ""}`,
       `Role: ${info.role}${info.memberName ? ` (${info.memberName})` : ""}`,
+      `team_phase=${team.team_phase ?? "none"}`,
+      `delivered=${team.delivered ? "yes" : "no"}`,
+      `output_format=${team.output_format ?? "free"}`,
       `Created: ${new Date(team.created).toISOString()}`,
       "",
       `Members (${team.members.length}):`,

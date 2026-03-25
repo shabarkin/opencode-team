@@ -214,6 +214,34 @@ describe("team phase 4", () => {
     })
   })
 
+  test("team_submit_result includes evidence tier in the rendered inbox message", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { member } = await basic("phase4-evidence-tier")
+        await (
+          await TeamSubmitResultTool.init()
+        ).execute(
+          {
+            title: "Audit complete",
+            summary: "Everything that mattered is covered.",
+            status: "success",
+            evidence_tier: "publicly_evidenced",
+          },
+          ctx(member.id),
+        )
+
+        const item = (await Inbox.all("phase4-evidence-tier", "lead")).find((entry) => entry.type === "result")
+        expect(item?.text).toContain("Evidence tier: publicly_evidenced")
+        expect(item?.metadata?.result).toMatchObject({ evidence_tier: "publicly_evidenced" })
+
+        await finish("phase4-evidence-tier")
+      },
+    })
+  })
+
   test("team_submit_result with task_id auto-completes the task", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({
@@ -386,6 +414,37 @@ describe("team phase 4", () => {
     })
   })
 
+  test("cleanup rejects concurrent cleanup attempts", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("phase4-cleanup-race")
+        await Team.setMemberStatus("phase4-cleanup-race", "worker", "shutdown")
+
+        let release = () => {}
+        const wait = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        const remove = spyOn(Inbox, "removeAll").mockImplementation(async () => {
+          await wait
+        })
+
+        const first = Team.cleanup("phase4-cleanup-race")
+        await Bun.sleep(0)
+
+        await expect(Team.cleanup("phase4-cleanup-race")).rejects.toThrow("cleanup already in progress")
+
+        release()
+        await first
+
+        remove.mockRestore()
+        await Session.remove(SessionID.make(lead.id))
+      },
+    })
+  })
+
   test("TeamScope.checkPath rejects excluded path", () => {
     const out = TeamScope.checkPath(".ananke/session.json", { path_excludes: [".ananke/**"] }, "/tmp/repo")
     expect(out.allow).toBe(false)
@@ -449,7 +508,7 @@ describe("team phase 4", () => {
 
         const team = await Team.get("phase4-scope-spawn")
         expect(team?.members.find((item) => item.name === "worker")?.scope).toMatchObject({
-          path_excludes: [".ananke/**"],
+          path_excludes: [".ananke/**", ".claude/**", ".opencode/**", ".git/**", "node_modules/**"],
           path_includes: ["src/**"],
           bash_allowlist: ["bun test *"],
         })
@@ -528,10 +587,12 @@ describe("team phase 4", () => {
           last_result_at: Date.now(),
           worktreeBranch: "team/phase4-status/worker",
         })
+        await Team.setTeamPhase("phase4-status", "delivery")
 
         const out = await (await TeamStatusTool.init()).execute({}, ctx(lead.id))
         expect(out.output).toContain("phase=testing")
         expect(out.output).toContain("last_result=")
+        expect(out.output).toContain("team_phase=delivery")
         expect(out.output).toContain("worktree=team/phase4-status/worker")
 
         await finish("phase4-status")

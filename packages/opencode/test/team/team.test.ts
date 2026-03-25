@@ -16,6 +16,7 @@ import {
   TeamShutdownTool,
   TeamCleanupTool,
 } from "../../src/tool/team"
+import { TeamCollectTool } from "../../src/tool/team-collect"
 import { Session } from "../../src/session"
 import { SessionPrompt } from "../../src/session/prompt"
 import { SessionStatus } from "../../src/session/status"
@@ -933,6 +934,7 @@ describe("Team tool definitions", () => {
           TeamSpawnTool,
           TeamMessageTool,
           TeamBroadcastTool,
+          TeamCollectTool,
           TeamTasksTool,
           TeamClaimTool,
           TeamStatusTool,
@@ -956,6 +958,7 @@ describe("Team tool definitions", () => {
   test("team tools have correct IDs", () => {
     expect(TeamCreateTool.id).toBe("team_create")
     expect(TeamSpawnTool.id).toBe("team_spawn")
+    expect(TeamCollectTool.id).toBe("team_collect")
     expect(TeamMessageTool.id).toBe("team_message")
     expect(TeamBroadcastTool.id).toBe("team_broadcast")
     expect(TeamTasksTool.id).toBe("team_tasks")
@@ -1024,6 +1027,47 @@ describe("Team tool definitions", () => {
         expect(result.output).toContain("already leading team")
 
         await Team.cleanup("existing-lead-team")
+      },
+    })
+  })
+
+  test("TeamCreateTool includes the collection workflow and stores delivery config", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const lead = await Session.create({})
+        await seed(lead.id)
+
+        const tool = await TeamCreateTool.init()
+        const result = await tool.execute(
+          { name: "workflow-team", receipts: true, output_format: "single_synthesis" },
+          {
+            sessionID: lead.id,
+            messageID: "msg_1",
+            agent: "general",
+            abort: new AbortController().signal,
+            messages: [],
+            metadata: () => {},
+            ask: async () => {},
+          } as any,
+        )
+
+        expect(result.output).toContain("CRITICAL WORKFLOW")
+        expect(result.output).toContain("team_collect")
+        expect(result.output).toContain("DELIVERY DISCIPLINE")
+        expect(result.output).toContain("OUTPUT FORMAT: Produce one concise narrative synthesis")
+
+        expect(await Team.get("workflow-team")).toMatchObject({
+          receipts: true,
+          output_format: "single_synthesis",
+          team_phase: "spawning",
+          delivered: false,
+        })
+
+        await Team.cleanup("workflow-team")
       },
     })
   })
@@ -1285,6 +1329,7 @@ describe("Team tool definitions", () => {
         )
 
         expect(result.title).toBe("Spawned teammate: worker")
+        expect(result.output).toContain("team_collect")
         expect(spawn).toHaveBeenCalledWith(
           expect.objectContaining({
             teamName: "named-agent-team",

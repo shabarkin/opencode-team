@@ -149,6 +149,7 @@ function resultText(input: z.infer<typeof SubmittedResultSchema>) {
     "",
     input.summary,
     input.files_changed?.length ? `Files changed: ${input.files_changed.join(", ")}` : "",
+    input.evidence_tier ? `Evidence tier: ${input.evidence_tier}` : "",
     input.evidence ? `Evidence: ${input.evidence}` : "",
     typeof input.confidence === "number" ? `Confidence: ${Math.round(input.confidence * 100)}%` : "",
     input.blockers ? `Blockers: ${input.blockers}` : "",

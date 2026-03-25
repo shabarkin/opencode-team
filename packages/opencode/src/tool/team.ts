@@ -6,8 +6,10 @@ import {
   TeamNameSchema,
   MemberNameSchema,
   CheckpointMode,
+  OutputFormat,
   MessagePriority,
   MessageType,
+  TeamMode,
   addDelegateRules,
   type TeamTask,
 } from "../team"
@@ -19,6 +21,7 @@ import { TeamEvent } from "../team/events"
 import { TeamStatusTool } from "./team-status"
 import { TeamNotepadTool } from "./team-notepad"
 import { TeamDelegateTool } from "./team-delegate"
+import { TeamCollectTool } from "./team-collect"
 import { TeamInboxTool, TeamSubmitResultTool, TeamWaitTool } from "./team-inbox"
 import { TeamPhaseTool, TeamShutdownAllTool } from "./team-lifecycle"
 import { TeamPolicy } from "../team/policy"
@@ -57,6 +60,13 @@ export const TeamCreateTool = Tool.define("team_create", {
       .number()
       .optional()
       .describe("Optional team-wide budget cap in USD. Default warnings fire at 80% and auto-pause at 100%."),
+    receipts: z
+      .boolean()
+      .optional()
+      .describe("If true, send low-priority read receipts when teammates read inbox messages."),
+    output_format: OutputFormat.optional().describe(
+      "Optional final lead output shape. Use 'single_synthesis' to force one concise narrative synthesis.",
+    ),
   }),
   async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
     // Constraint: no nested teams — teammates cannot create teams
@@ -81,6 +91,10 @@ export const TeamCreateTool = Tool.define("team_create", {
       leadSessionID: ctx.sessionID,
       delegate: params.delegate,
       maxCost: params.max_cost,
+      receipts: params.receipts,
+      output_format: params.output_format,
+      team_phase: "spawning",
+      delivered: false,
     })
 
     if (params.tasks?.length) {
@@ -117,6 +131,7 @@ export const TeamCreateTool = Tool.define("team_create", {
         "  team_inbox        — Read inbox state or flush undelivered messages",
         "  team_submit_result — Submit a structured result to the lead",
         "  team_wait         — Check whether a team condition is already met",
+        "  team_collect      — Wait for teammate results before synthesis",
         "  team_tasks        — View/add/complete shared tasks",
         "  team_claim        — Claim a pending task",
         "  team_notepad      — Read/write shared team knowledge",
@@ -127,6 +142,21 @@ export const TeamCreateTool = Tool.define("team_create", {
         "  team_shutdown_all — Request shutdown for every active teammate",
         "  team_shutdown     — Gracefully stop a teammate",
         "  team_cleanup      — Remove team resources (after all shutdown)",
+        "",
+        "CRITICAL WORKFLOW:",
+        "1. Spawn all teammates needed for the task",
+        "2. Use team_collect to WAIT for all teammates to submit results",
+        "3. Only AFTER team_collect returns, synthesize the final output",
+        "4. Do NOT produce final output while any teammate is still working",
+        "5. Deliver ONE consolidated synthesis, then shut down the team",
+        "",
+        "DELIVERY DISCIPLINE:",
+        "- Produce ONE consolidated synthesis after team_collect returns",
+        "- Do NOT re-send summaries or repeatedly offer next steps",
+        "- After delivery: team_shutdown_all → team_cleanup → done",
+        params.output_format === "single_synthesis"
+          ? "OUTPUT FORMAT: Produce one concise narrative synthesis. No matrices, scorecards, or checklists."
+          : "",
         "",
         "Lifecycle: spawn → work → shutdown → cleanup (auto if all shutdown)",
         params.tasks?.length ? `\nInitial tasks: ${params.tasks.length}` : "",
@@ -196,6 +226,17 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
             "They can read/search but cannot write/edit/bash until the lead approves their plan. " +
             "The teammate should research, then send their plan to the lead via team_message. " +
             "The lead can then use team_approve_plan to grant write access.",
+        ),
+      mode: TeamMode.optional().describe(
+        "'research' = read-only (no write/edit/bash). 'implementation' = full access. Default: 'mixed'.",
+      ),
+      result_deadline: z
+        .number()
+        .int()
+        .min(1)
+        .optional()
+        .describe(
+          "Optional result deadline in minutes. The teammate and lead are warned if no result arrives in time.",
         ),
       checkpoint: CheckpointMode.optional().describe(
         "Optional checkpoint mode. Use 'after_each_write' to pause after write/edit/bash/apply_patch, " +
@@ -311,7 +352,9 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
         prompt,
         claimTask: params.claim_task,
         planApproval: !!params.require_plan_approval,
+        mode: params.mode ?? "mixed",
         checkpoint: params.checkpoint ?? "none",
+        resultDeadline: params.result_deadline,
         timeout: params.timeout,
         maxCost: params.max_cost,
         scope:
@@ -323,6 +366,10 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
               }
             : undefined,
       })
+
+      if ((await Team.get(teamName))?.team_phase === "spawning") {
+        await Team.setTeamPhase(teamName, "discovery")
+      }
 
       if (request) {
         await Team.removeSpawnRequest(teamName, request.id)
@@ -343,10 +390,13 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
           params.require_plan_approval
             ? "Plan approval REQUIRED: teammate is in read-only mode until you approve their plan with team_approve_plan."
             : "",
+          params.mode === "research" ? "Research mode enabled: this teammate is read-only." : "",
           (params.checkpoint ?? "none") !== "none" ? `Checkpoint mode enabled: ${params.checkpoint ?? "none"}.` : "",
+          params.result_deadline ? `Result deadline: ${params.result_deadline} minute(s).` : "",
           params.max_cost ? `Cost limit: $${params.max_cost.toFixed(2)}.` : "",
           "",
-          "The teammate is now working independently in the background.",
+          "The teammate is now working in the background. After spawning all teammates,",
+          "use team_collect to wait for their results before synthesizing.",
           "Messages from the teammate will be delivered automatically when they finish or need help.",
         ]
           .filter(Boolean)
@@ -914,6 +964,7 @@ export const TeamCleanupTool = Tool.define("team_cleanup", {
       }
 
       const wasDelegate = teamInfo.team.delegate === true
+      await Team.setTeamPhase(params.name, "completed")
       await Team.cleanup(params.name)
       return {
         title: `Team cleaned up: ${params.name}`,
@@ -1078,6 +1129,7 @@ export const TeamTools = [
   TeamInboxTool,
   TeamSubmitResultTool,
   TeamWaitTool,
+  TeamCollectTool,
   TeamTasksTool,
   TeamClaimTool,
   TeamApprovePlanTool,

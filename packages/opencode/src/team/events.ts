@@ -10,11 +10,24 @@ export type CheckpointMode = z.infer<typeof CheckpointMode>
 export const ResultStatusSchema = z.enum(["success", "partial", "blocked", "failed"])
 export type ResultStatus = z.infer<typeof ResultStatusSchema>
 
+export const EvidenceTier = z.enum(["publicly_evidenced", "strong_analogue", "hypothesis"])
+export type EvidenceTier = z.infer<typeof EvidenceTier>
+
+export const TeamMode = z.enum(["research", "implementation", "mixed"])
+export type TeamMode = z.infer<typeof TeamMode>
+
+export const TeamPhaseLevel = z.enum(["spawning", "discovery", "peer_relay", "synthesis", "delivery", "completed"])
+export type TeamPhaseLevel = z.infer<typeof TeamPhaseLevel>
+
+export const OutputFormat = z.enum(["free", "single_synthesis", "structured_report"])
+export type OutputFormat = z.infer<typeof OutputFormat>
+
 export const SubmittedResultSchema = z.object({
   title: z.string().max(120),
   summary: z.string().max(2000),
   status: ResultStatusSchema,
   files_changed: z.array(z.string()).optional(),
+  evidence_tier: EvidenceTier.optional(),
   evidence: z.string().optional(),
   confidence: z.number().min(0).max(1).optional(),
   blockers: z.string().optional(),
@@ -97,8 +110,10 @@ export const TeamMemberSchema = z.object({
   worktreePath: z.string().optional(),
   worktreeBranch: z.string().optional(),
   scope: TeamScopeSchema.optional(),
+  mode: TeamMode.optional(),
   phase: MemberPhase.optional(),
   last_result_at: z.number().optional(),
+  result_deadline: z.number().optional(),
   error_kind: TeamErrorKind.optional(),
 })
 export type TeamMember = z.infer<typeof TeamMemberSchema>
@@ -122,6 +137,10 @@ export const TeamInfoSchema = z.object({
   delegate: z.boolean().optional(),
   maxCost: z.number().nonnegative().optional(),
   scope: TeamScopeSchema.optional(),
+  receipts: z.boolean().optional(),
+  team_phase: TeamPhaseLevel.optional(),
+  delivered: z.boolean().optional(),
+  output_format: OutputFormat.optional(),
   pending_spawn_requests: z.array(PendingSpawnRequestSchema).optional(),
 })
 export type TeamInfo = z.infer<typeof TeamInfoSchema>
@@ -328,6 +347,15 @@ export namespace TeamEvent {
       teamName: z.string(),
       agentName: z.string(),
       removed: z.number(),
+    }),
+  )
+
+  export const TeamPhaseChanged = BusEvent.define(
+    "team.phase.changed",
+    z.object({
+      teamName: z.string(),
+      phase: TeamPhaseLevel,
+      previous: TeamPhaseLevel.optional(),
     }),
   )
 }
