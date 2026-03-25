@@ -43,6 +43,8 @@
 
 ---
 
+### This repo is a fork of opencode with an experimental feature of agent teams inspired by this blog post https://dev.to/uenyioha/porting-claude-codes-agent-teams-to-opencode-4hol 
+
 ### Installation
 
 ```bash
