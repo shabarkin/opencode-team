@@ -210,6 +210,29 @@ The opencode server exposes the following APIs.
 
 ---
 
+### Manage teams
+
+This fork exposes experimental `/team` routes for programmatic team management.
+They are available only when `OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1` is set.
+
+| Method | Path                          | Description                                  | Response                                                   |
+| ------ | ----------------------------- | -------------------------------------------- | ---------------------------------------------------------- |
+| `GET`  | `/team`                       | List teams visible to the calling session    | <a href={typesUrl}><code>TeamInfoPublic[]</code></a>       |
+| `GET`  | `/team/:name`                 | Get one team                                 | <code>TeamInfoPublic</code>                                |
+| `GET`  | `/team/:name/tasks`           | List shared tasks for a team                 | <code>TeamTask[]</code>                                    |
+| `GET`  | `/team/by-session/:sessionID` | Get team info for the current session        | session-scoped team payload or `null`                      |
+| `POST` | `/team/:name/delegate`        | Enable or disable delegate mode              | `{ ok: true, delegate: boolean }`                          |
+| `POST` | `/team/:name/steer`           | Send instructions to one teammate            | `{ ok: true, action: "restart" \| "resume" \| "message" }` |
+| `POST` | `/team/:name/pause`           | Pause one teammate                           | `{ ok: true }`                                             |
+| `POST` | `/team/:name/resume`          | Resume one teammate                          | `{ ok: true }`                                             |
+| `POST` | `/team/:name/steer-all`       | Broadcast new instructions to active members | `{ ok: true }`                                             |
+| `POST` | `/team/:name/cancel`          | Cancel one teammate or all teammates         | `{ ok: true, cancelled: number }`                          |
+
+Send the caller session in the `x-opencode-session` header.
+Only the lead or team members can access their team state.
+
+---
+
 ### Tools (Experimental)
 
 | Method | Path                                        | Description                              | Response                                     |

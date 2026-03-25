@@ -103,6 +103,20 @@ Toggle tool execution details.
 
 ---
 
+### delegate
+
+Toggle delegate mode for the active lead session.
+
+```bash frame="none"
+/delegate
+```
+
+:::note
+Only available when Agent Teams are enabled and the current session is the team lead.
+:::
+
+---
+
 ### editor
 
 Open external editor for composing messages. Uses the editor set in your `EDITOR` environment variable. [Learn more](#editor-setup).
@@ -282,6 +296,19 @@ Unshare current session. [Learn more](/docs/share#un-sharing).
 ```bash frame="none"
 /unshare
 ```
+
+---
+
+## Manage teams
+
+With `OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1`, lead sessions can coordinate teammates from the TUI.
+The header and sidebar show member status, task progress, and pending spawn requests.
+
+- Use `session_child_first`, `session_child_cycle`, and `session_parent` to move between the lead and teammate sessions.
+- Use the **Steer** action to send follow-up instructions to one teammate or all active teammates.
+- Use `team_message` in the prompt when you want to send direct coordination messages.
+
+This fork-specific workflow is experimental and may change.
 
 ---
 

@@ -43,7 +43,21 @@
 
 ---
 
-### This repo is a fork of opencode with an experimental feature of agent teams inspired by this blog post https://dev.to/uenyioha/porting-claude-codes-agent-teams-to-opencode-4hol 
+### Fork note
+
+This repository is a fork of [`anomalyco/opencode`](https://github.com/anomalyco/opencode).
+It exists to carry an experimental Agent Teams workflow inspired by [this porting write-up](https://dev.to/uenyioha/porting-claude-codes-agent-teams-to-opencode-4hol).
+
+- Coordinated multi-agent sessions
+- Built-in `team_*` coordination tools
+- Team-aware TUI navigation and steering
+- `/team` HTTP routes for automation
+
+```bash
+OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1 opencode
+```
+
+Expect the feature and APIs to change as the fork evolves.
 
 ### Installation
 
@@ -111,6 +125,9 @@ OpenCode includes two built-in agents you can switch between with the `Tab` key.
 
 Also included is a **general** subagent for complex searches and multistep tasks.
 This is used internally and can be invoked using `@general` in messages.
+
+This fork also adds an experimental Agent Teams workflow.
+Enable it with `OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1` to let a lead coordinate teammate sessions with the built-in `team_*` tools.
 
 Learn more about [agents](https://opencode.ai/docs/agents).
 

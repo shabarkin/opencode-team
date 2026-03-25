@@ -269,6 +269,20 @@ This tool is disabled for subagents by default, but you can enable it manually. 
 
 ---
 
+### Coordinate work
+
+This fork adds experimental `team_*` tools for coordinated multi-agent work.
+They are available only when `OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1` is set.
+
+- `team_create`, `team_spawn`, `team_shutdown_all`, `team_shutdown`, and `team_cleanup` manage the team lifecycle.
+- `team_message`, `team_reply`, `team_broadcast`, `team_inbox`, and `team_submit_result` handle coordination and reporting.
+- `team_tasks`, `team_claim`, `team_collect`, `team_wait`, `team_notepad`, `team_phase`, and `team_status` track shared work and progress.
+- `team_approve_plan`, `team_health`, `team_restart`, `team_delegate`, and `team_request_spawn` help with review, recovery, and extra delegation.
+
+These tool IDs are still experimental and may change.
+
+---
+
 ### webfetch
 
 Fetch web content.
