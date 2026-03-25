@@ -355,6 +355,12 @@ function normalizeMember(member: TeamMember): TeamMember {
       typeof member.result_deadline === "number" && Number.isFinite(member.result_deadline)
         ? member.result_deadline
         : undefined,
+    assigned_at:
+      typeof member.assigned_at === "number" && Number.isFinite(member.assigned_at)
+        ? member.assigned_at
+        : status === "busy"
+          ? (member.started ?? member.updated)
+          : undefined,
     error_kind: TeamErrorKind.safeParse(member.error_kind).success ? member.error_kind : undefined,
   }
 }
@@ -611,13 +617,18 @@ export namespace Team {
     const next = TeamMemberSchema.parse(member)
     const lower = next.name.toLowerCase()
     if (lower === "lead") throw new Error(`Name "lead" is reserved and cannot be used for a teammate.`)
+    const now = Date.now()
 
     await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
       if (draft.members.some((m) => m.name.toLowerCase() === lower))
         throw new Error(`Teammate "${next.name}" already exists in team "${teamName}" (case-insensitive)`)
       if (draft.members.some((m) => m.sessionID === next.sessionID))
         throw new Error(`Session "${next.sessionID}" is already registered in team "${teamName}"`)
-      draft.members.push({ ...next, updated: next.updated ?? Date.now() })
+      draft.members.push({
+        ...next,
+        updated: next.updated ?? now,
+        ...(next.status === "busy" ? { assigned_at: next.assigned_at ?? now } : {}),
+      })
     })
 
     log.info("member added", { teamName, member: next.name, agent: next.agent })
@@ -643,11 +654,13 @@ export namespace Team {
         const from = next.status
         if (!options?.force && !canTransition(from, status, MEMBER_TRANSITIONS)) return
         if (from === status) return
+        const now = Date.now()
         agent = next.agent
         executionStatus = next.execution_status ?? "idle"
-        runtime = next.started ? Math.max(0, Date.now() - next.started) : 0
+        runtime = next.started ? Math.max(0, now - next.started) : 0
         member.status = status
-        member.updated = Date.now()
+        member.updated = now
+        if (status === "busy") member.assigned_at = now
         if (status !== "error") delete member.error_kind
         changed = true
       })

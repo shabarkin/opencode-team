@@ -964,7 +964,6 @@ export const TeamCleanupTool = Tool.define("team_cleanup", {
       }
 
       const wasDelegate = teamInfo.team.delegate === true
-      await Team.setTeamPhase(params.name, "completed")
       await Team.cleanup(params.name)
       return {
         title: `Team cleaned up: ${params.name}`,

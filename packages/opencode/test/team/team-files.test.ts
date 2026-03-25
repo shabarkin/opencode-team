@@ -152,4 +152,47 @@ describe("team file tracking", () => {
       },
     })
   })
+
+  test("ignores same relative path edits across isolated worktrees", async () => {
+    await Instance.provide({
+      directory: root,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const stop = initFileTracking()
+        const send = spyOn(TeamMessaging, "send").mockImplementation(async () => {})
+
+        await Team.create({ name: "files-f", leadSessionID: "ses_lead_files_f" })
+        await Team.addMember("files-f", {
+          name: "f1",
+          sessionID: "ses_f1",
+          agent: "general",
+          status: "busy",
+          worktreePath: "/tmp/team-files-f1",
+        })
+        await Team.addMember("files-f", {
+          name: "f2",
+          sessionID: "ses_f2",
+          agent: "general",
+          status: "busy",
+          worktreePath: "/tmp/team-files-f2",
+        })
+
+        const diff = [{ file: ".ananke/findings.db", before: "", after: "x", additions: 1, deletions: 0 }]
+        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_f1"), diff })
+        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_f2"), diff })
+
+        const team = await Team.get("files-f")
+        expect(activeConflicts("files-f", team!)).toEqual([])
+        expect(send).not.toHaveBeenCalled()
+
+        send.mockRestore()
+        stop()
+        await Team.setMemberStatus("files-f", "f1", "shutdown")
+        await Team.setMemberStatus("files-f", "f2", "shutdown")
+        await Team.cleanup("files-f")
+      },
+    })
+  })
 })

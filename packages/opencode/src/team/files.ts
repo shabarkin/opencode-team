@@ -26,17 +26,24 @@ interface FileEdit {
 /** In-memory map: team:file → recent editors */
 const edits = new Map<string, FileEdit[]>()
 const warns = new Map<string, number>()
+const SEP = "\u0000"
+const SHARED = "shared"
 
 /** Conflict window: edits within this period trigger a warning (5 minutes) */
 const CONFLICT_WINDOW = 5 * 60 * 1000
 const CONFLICT_COOLDOWN = 60_000
 
-function key(teamName: string, file: string): string {
-  return `${teamName}:${file}`
+function base(member?: { worktreePath?: string }) {
+  return member?.worktreePath ?? SHARED
 }
 
-function file(key: string): string {
-  return key.slice(key.indexOf(":") + 1)
+function key(teamName: string, dir: string, file: string): string {
+  return [teamName, dir, file].join(SEP)
+}
+
+function part(id: string) {
+  const [teamName, dir, file] = id.split(SEP)
+  return { teamName, dir, file }
 }
 
 function recent(list: FileEdit[], now: number) {
@@ -64,9 +71,11 @@ export function initFileTracking(): () => void {
     if (!team) return
     const skip = shutdowns(team)
     if (skip.has(editor)) return
+    const member = team.members.find((item) => item.name === editor)
+    if (!member) return
 
     for (const file of files) {
-      const id = key(teamName, file.file)
+      const id = key(teamName, base(member), file.file)
       const prev = recent(edits.get(id) ?? [], now).filter((edit) => !skip.has(edit.memberName))
       const members = [...new Set(prev.map((edit) => edit.memberName).filter((name) => name !== editor))]
 
@@ -130,6 +139,8 @@ export function recentEdits(teamName: string): Array<{ file: string; memberName:
   const now = Date.now()
   const result: Array<{ file: string; memberName: string; timestamp: number }> = []
   for (const [id, list] of edits) {
+    const item = part(id)
+    if (item.teamName !== teamName) continue
     const next = recent(list, now)
     if (next.length === 0) {
       edits.delete(id)
@@ -137,9 +148,9 @@ export function recentEdits(teamName: string): Array<{ file: string; memberName:
       continue
     }
     edits.set(id, next)
-    const edit = next.findLast((edit) => edit.teamName === teamName)
+    const edit = next.findLast(() => true)
     if (!edit) continue
-    result.push({ file: file(id), memberName: edit.memberName, timestamp: edit.timestamp })
+    result.push({ file: item.file, memberName: edit.memberName, timestamp: edit.timestamp })
   }
   return result
 }
@@ -156,6 +167,8 @@ export function activeConflicts(
   const skip = shutdowns(team)
 
   for (const [id, list] of edits) {
+    const item = part(id)
+    if (item.teamName !== teamName) continue
     const next = recent(list, now)
     if (next.length === 0) {
       edits.delete(id)
@@ -167,7 +180,7 @@ export function activeConflicts(
       ...new Set(next.filter((edit) => edit.teamName === teamName).map((edit) => edit.memberName)),
     ].filter((name) => !skip.has(name))
     if (members.length < 2) continue
-    result.push({ file: file(id), members })
+    result.push({ file: item.file, members })
   }
 
   return result
@@ -175,7 +188,7 @@ export function activeConflicts(
 
 export function removeEdits(teamName: string) {
   for (const id of edits.keys()) {
-    if (!id.startsWith(`${teamName}:`)) continue
+    if (part(id).teamName !== teamName) continue
     edits.delete(id)
     warns.delete(id)
   }

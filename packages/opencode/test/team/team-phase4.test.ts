@@ -408,6 +408,7 @@ describe("team phase 4", () => {
         const out = await (await TeamCleanupTool.init()).execute({ name: "phase4-cleanup-block" }, ctx(lead.id))
         expect(out.title).toBe("Cleanup failed")
         expect(out.output).toContain("Shut them down first")
+        expect((await Team.get("phase4-cleanup-block"))?.team_phase).toBeUndefined()
 
         await finish("phase4-cleanup-block")
       },

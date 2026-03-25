@@ -5,6 +5,7 @@ import { Log } from "../../src/util/log"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Session } from "../../src/session"
+import { Storage } from "../../src/storage/storage"
 import { Team } from "../../src/team"
 import { TeamCollectTool } from "../../src/tool/team-collect"
 import { TeamSubmitResultTool } from "../../src/tool/team-inbox"
@@ -159,6 +160,55 @@ describe("team collect", () => {
         time.mockRestore()
         sleep.mockRestore()
         await finish("collect-timeout")
+      },
+    })
+  })
+
+  test("team_collect ignores stale results from an older assignment", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
+        const { lead, member } = await basic("collect-stale")
+
+        await (
+          await TeamSubmitResultTool.init()
+        ).execute(
+          {
+            title: "Old result",
+            summary: "This should not count anymore.",
+            status: "success",
+          },
+          ctx(member.id),
+        )
+
+        const mark = Date.now() + 1_000
+        await Storage.update(["team", Instance.project.id, "collect-stale"], (draft: any) => {
+          const item = draft.members.find((entry: any) => entry.name === "worker")
+          if (!item) return
+          item.status = "busy"
+          item.execution_status = "running"
+          item.assigned_at = mark
+        })
+
+        let now = mark
+        const time = spyOn(Date, "now").mockImplementation(() => {
+          now += 6_000
+          return now
+        })
+
+        const out = await (
+          await TeamCollectTool.init()
+        ).execute({ timeout_seconds: 10, poll_interval_seconds: 5 }, ctx(lead.id))
+
+        expect(out.metadata).toMatchObject({ collected: [], pending: ["worker"], timed_out: true })
+        expect(out.output).not.toContain("Old result")
+
+        time.mockRestore()
+        sleep.mockRestore()
+        await finish("collect-stale")
       },
     })
   })

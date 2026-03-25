@@ -27,6 +27,16 @@ function latest(items: Awaited<ReturnType<typeof Inbox.all>>, name: string) {
     .toSorted((a, b) => b.timestamp - a.timestamp)[0]
 }
 
+function current(
+  member: NonNullable<Awaited<ReturnType<typeof Team.get>>>["members"][number],
+  items: Awaited<ReturnType<typeof Inbox.all>>,
+) {
+  const item = latest(items, member.name)
+  if (!item) return
+  if (typeof member.assigned_at !== "number") return item
+  if (item.timestamp >= member.assigned_at) return item
+}
+
 function scan(
   team: NonNullable<Awaited<ReturnType<typeof Team.get>>>,
   items: Awaited<ReturnType<typeof Inbox.all>>,
@@ -39,7 +49,7 @@ function scan(
   for (const name of names) {
     const member = team.members.find((item) => item.name === name)
     if (!member) continue
-    const item = latest(items, name)
+    const item = current(member, items)
     if (item) {
       collected.push(name)
       notes.push([`## ${name}`, item.text].join("\n"))

@@ -114,6 +114,7 @@ export const TeamMemberSchema = z.object({
   phase: MemberPhase.optional(),
   last_result_at: z.number().optional(),
   result_deadline: z.number().optional(),
+  assigned_at: z.number().optional(),
   error_kind: TeamErrorKind.optional(),
 })
 export type TeamMember = z.infer<typeof TeamMemberSchema>

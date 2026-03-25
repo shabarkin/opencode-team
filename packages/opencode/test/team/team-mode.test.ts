@@ -3,6 +3,7 @@ import { Env } from "../../src/env"
 import { Instance } from "../../src/project/instance"
 import { Log } from "../../src/util/log"
 import { ModelID, ProviderID } from "../../src/provider/schema"
+import { Permission } from "../../src/permission"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Session } from "../../src/session"
 import { SessionPrompt } from "../../src/session/prompt"
@@ -79,6 +80,8 @@ describe("team mode", () => {
         for (const tool of WRITE_TOOLS) {
           expect(session.permission).toContainEqual({ permission: tool, pattern: "*:research-mode", action: "deny" })
         }
+        expect(Permission.evaluate("edit", "src/index.ts", session.permission ?? []).action).toBe("deny")
+        expect(Permission.evaluate("bash", "git status", session.permission ?? []).action).toBe("deny")
 
         loop.mockRestore()
         await finish("research-mode")

@@ -203,6 +203,12 @@ test("evaluate - wildcard pattern match", () => {
   expect(result.action).toBe("allow")
 })
 
+test("evaluate - tagged wildcard matches while disabled keeps the tool visible", () => {
+  const rules: Permission.Ruleset = [{ permission: "edit", pattern: "*:plan-approval", action: "deny" }]
+  expect(Permission.evaluate("edit", "src/foo.ts", rules).action).toBe("deny")
+  expect(Permission.disabled(["edit", "write", "apply_patch", "multiedit"], rules).size).toBe(0)
+})
+
 test("evaluate - last matching rule wins", () => {
   const result = Permission.evaluate("bash", "rm", [
     { permission: "bash", pattern: "*", action: "allow" },
