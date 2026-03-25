@@ -7,6 +7,41 @@ export type MemberStatus = z.infer<typeof MemberStatus>
 export const CheckpointMode = z.enum(["none", "after_each_write", "after_each_tool"])
 export type CheckpointMode = z.infer<typeof CheckpointMode>
 
+export const ResultStatusSchema = z.enum(["success", "partial", "blocked", "failed"])
+export type ResultStatus = z.infer<typeof ResultStatusSchema>
+
+export const SubmittedResultSchema = z.object({
+  title: z.string().max(120),
+  summary: z.string().max(2000),
+  status: ResultStatusSchema,
+  files_changed: z.array(z.string()).optional(),
+  evidence: z.string().optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  blockers: z.string().optional(),
+  task_id: z.string().optional(),
+})
+export type SubmittedResult = z.infer<typeof SubmittedResultSchema>
+
+export const TeamScopeSchema = z.object({
+  path_excludes: z.array(z.string()).optional(),
+  path_includes: z.array(z.string()).optional(),
+  bash_allowlist: z.array(z.string()).optional(),
+})
+export type TeamScope = z.infer<typeof TeamScopeSchema>
+
+export const TeamErrorKind = z.enum([
+  "tool_failed",
+  "policy_blocked",
+  "timeout",
+  "message_undelivered",
+  "member_crashed",
+  "budget_exceeded",
+])
+export type TeamErrorKind = z.infer<typeof TeamErrorKind>
+
+export const MemberPhase = z.enum(["researching", "implementing", "testing", "waiting_approval", "reporting", "idle"])
+export type MemberPhase = z.infer<typeof MemberPhase>
+
 export const MessageType = z.enum([
   "message",
   "question",
@@ -59,6 +94,12 @@ export const TeamMemberSchema = z.object({
   checkpoint: CheckpointMode.optional(),
   activeDelegations: z.number().int().nonnegative().optional(),
   maxCost: z.number().nonnegative().optional(),
+  worktreePath: z.string().optional(),
+  worktreeBranch: z.string().optional(),
+  scope: TeamScopeSchema.optional(),
+  phase: MemberPhase.optional(),
+  last_result_at: z.number().optional(),
+  error_kind: TeamErrorKind.optional(),
 })
 export type TeamMember = z.infer<typeof TeamMemberSchema>
 
@@ -80,6 +121,7 @@ export const TeamInfoSchema = z.object({
   created: z.number(),
   delegate: z.boolean().optional(),
   maxCost: z.number().nonnegative().optional(),
+  scope: TeamScopeSchema.optional(),
   pending_spawn_requests: z.array(PendingSpawnRequestSchema).optional(),
 })
 export type TeamInfo = z.infer<typeof TeamInfoSchema>
@@ -209,6 +251,27 @@ export namespace TeamEvent {
       memberName: z.string(),
       approved: z.boolean(),
       feedback: z.string().optional(),
+    }),
+  )
+
+  export const ResultSubmitted = BusEvent.define(
+    "team.result.submitted",
+    z.object({
+      teamName: z.string(),
+      memberName: z.string(),
+      result: SubmittedResultSchema,
+      taskId: z.string().optional(),
+    }),
+  )
+
+  export const MessageUndelivered = BusEvent.define(
+    "team.message.undelivered",
+    z.object({
+      teamName: z.string(),
+      from: z.string(),
+      to: z.string(),
+      messageID: z.string(),
+      error: z.string().optional(),
     }),
   )
 

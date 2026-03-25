@@ -19,41 +19,9 @@ import { TeamEvent } from "../team/events"
 import { TeamStatusTool } from "./team-status"
 import { TeamNotepadTool } from "./team-notepad"
 import { TeamDelegateTool } from "./team-delegate"
+import { TeamInboxTool, TeamSubmitResultTool, TeamWaitTool } from "./team-inbox"
+import { TeamPhaseTool, TeamShutdownAllTool } from "./team-lifecycle"
 import { TeamPolicy } from "../team/policy"
-
-const SHUTDOWN_TIMEOUT = 30_000
-
-async function wake(teamName: string, name: string, sessionID: string) {
-  const { SessionPrompt } = await import("../session/prompt")
-  const { SessionStatus } = await import("../session/status")
-  const { SessionID } = await import("../session/schema")
-
-  const sid = SessionID.make(sessionID)
-  const status = await SessionStatus.get(sid)
-  if (status.type !== "idle") return
-
-  SessionPrompt.loop({ sessionID: sid })
-    .then(async () => {
-      const team = await Team.get(teamName)
-      const member = team?.members.find((m) => m.name === name)
-      if (member?.status !== "shutdown_requested") return
-      await Team.transitionMemberStatus(teamName, name, "shutdown")
-    })
-    .catch(() => {})
-}
-
-function timeout(teamName: string, name: string, sessionID: string) {
-  setTimeout(async () => {
-    const team = await Team.get(teamName)
-    const member = team?.members.find((m) => m.name === name)
-    if (!member || member.status === "shutdown") return
-
-    const { SessionPrompt } = await import("../session/prompt")
-    const { SessionID } = await import("../session/schema")
-    await SessionPrompt.cancel(SessionID.make(sessionID))
-    await Team.transitionMemberStatus(teamName, name, "shutdown", { force: true })
-  }, SHUTDOWN_TIMEOUT)
-}
 
 /**
  * Create a new agent team. Only the lead session should call this.
@@ -146,12 +114,17 @@ export const TeamCreateTool = Tool.define("team_create", {
         "  team_reply        — Reply to the latest team message with thread context",
         "  team_broadcast    — Message all teammates",
         "  team_delegate     — Run a lightweight delegated subagent",
+        "  team_inbox        — Read inbox state or flush undelivered messages",
+        "  team_submit_result — Submit a structured result to the lead",
+        "  team_wait         — Check whether a team condition is already met",
         "  team_tasks        — View/add/complete shared tasks",
         "  team_claim        — Claim a pending task",
         "  team_notepad      — Read/write shared team knowledge",
+        "  team_phase        — Report a teammate work phase",
         "  team_health       — Diagnose stuck members, blocked tasks",
         "  team_restart      — Re-engage an idle/errored teammate",
         "  team_approve_plan — Approve a teammate's plan (if plan mode)",
+        "  team_shutdown_all — Request shutdown for every active teammate",
         "  team_shutdown     — Gracefully stop a teammate",
         "  team_cleanup      — Remove team resources (after all shutdown)",
         "",
@@ -228,6 +201,9 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
         "Optional checkpoint mode. Use 'after_each_write' to pause after write/edit/bash/apply_patch, " +
           "'after_each_tool' to pause after every tool call, or 'none' to disable checkpoints.",
       ),
+      path_excludes: z.array(z.string()).optional().describe("Optional glob patterns this teammate must not touch"),
+      path_includes: z.array(z.string()).optional().describe("Optional glob patterns this teammate is limited to"),
+      bash_allowlist: z.array(z.string()).optional().describe("Optional bash command patterns this teammate may run"),
     }),
     async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
       let requestedBy = "lead"
@@ -338,6 +314,14 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
         checkpoint: params.checkpoint ?? "none",
         timeout: params.timeout,
         maxCost: params.max_cost,
+        scope:
+          params.path_excludes || params.path_includes || params.bash_allowlist
+            ? {
+                path_excludes: params.path_excludes,
+                path_includes: params.path_includes,
+                bash_allowlist: params.bash_allowlist,
+              }
+            : undefined,
       })
 
       if (request) {
@@ -855,7 +839,14 @@ export const TeamShutdownTool = Tool.define("team_shutdown", {
         metadata: {},
       }
     }
-    if (member.status === "shutdown") {
+
+    const result = await Team.shutdown({
+      teamName: teamInfo.team.name,
+      memberName: params.name,
+      reason: params.reason,
+    })
+
+    if (result.status === "already_shutdown") {
       return {
         title: "Already shutdown",
         output: `Teammate "${params.name}" is already shut down.`,
@@ -863,68 +854,12 @@ export const TeamShutdownTool = Tool.define("team_shutdown", {
       }
     }
 
-    const status = member.status
-    const reason = params.reason ?? "The lead has requested you shut down."
-    const tasks = await TeamTasks.list(teamInfo.team.name)
-    const guard = await TeamPolicy.shutdownBefore({
-      teamName: teamInfo.team.name,
-      name: params.name,
-      tasksRemaining: tasks.filter(
-        (task) => task.assignee === params.name && task.status !== "completed" && task.status !== "cancelled",
-      ).length,
-    })
-    if (!guard.allow) {
+    if (result.status === "blocked") {
       return {
         title: "Shutdown blocked",
-        output: guard.reason ?? `Team policy blocked shutdown for "${params.name}".`,
+        output: result.reason ?? `Team policy blocked shutdown for "${params.name}".`,
         metadata: {},
       }
-    }
-
-    // Transition to shutdown_requested BEFORE sending the message.
-    // This ensures autoWake's .then() handler sees the correct status
-    // when the auto-woken loop completes.
-    await Team.transitionMemberStatus(teamInfo.team.name, params.name, "shutdown_requested")
-
-    await Bus.publish(TeamEvent.ShutdownRequest, {
-      teamName: teamInfo.team.name,
-      memberName: params.name,
-    })
-
-    // Send the shutdown message — this triggers autoWake which starts
-    // a new prompt loop. When that loop ends, the .then() handler
-    // sees shutdown_requested and transitions to shutdown.
-    // If the send fails, fall back to direct shutdown since there's
-    // no loop that will trigger the transition.
-    const sent = await TeamMessaging.send({
-      teamName: teamInfo.team.name,
-      from: "lead",
-      to: params.name,
-      text: [
-        `SHUTDOWN REQUEST: ${reason}`,
-        "",
-        "Please wrap up your current work:",
-        "1. Summarize your findings and send them to the lead.",
-        "2. Stop working after sending your summary.",
-      ].join("\n"),
-    }).then(
-      () => true,
-      async () => {
-        const { SessionPrompt } = await import("../session/prompt")
-        const { SessionID } = await import("../session/schema")
-        await SessionPrompt.cancel(SessionID.make(member.sessionID))
-        await Team.transitionMemberStatus(teamInfo.team.name, params.name, "shutdown")
-        return false
-      },
-    )
-
-    if (status === "busy") {
-      await Team.cancelMember(teamInfo.team.name, params.name)
-    }
-
-    if (sent) {
-      await wake(teamInfo.team.name, params.name, member.sessionID)
-      timeout(teamInfo.team.name, params.name, member.sessionID)
     }
 
     return {
@@ -944,6 +879,7 @@ export const TeamCleanupTool = Tool.define("team_cleanup", {
     "All teammates must be shut down first. Only the lead should call this.",
   parameters: z.object({
     name: TeamNameSchema.describe("Team name to clean up"),
+    force: z.boolean().optional().describe("Force straggler shutdown before cleanup"),
   }),
   async execute(params, ctx) {
     // Authorization: only the lead of this specific team can clean it up
@@ -957,6 +893,26 @@ export const TeamCleanupTool = Tool.define("team_cleanup", {
     }
 
     try {
+      if (params.force) {
+        const team = await Team.get(params.name)
+        const live = team?.members.filter((member) => member.status !== "shutdown") ?? []
+        if (live.length > 0) {
+          await Team.forceShutdownAll(params.name, "Forced cleanup requested by the lead.")
+          const stop = Date.now() + 5_000
+          while (Date.now() < stop) {
+            const next = await Team.get(params.name)
+            if (!next || next.members.every((member) => member.status === "shutdown")) break
+            await Bun.sleep(100)
+          }
+
+          const next = await Team.get(params.name)
+          const left = next?.members.filter((member) => member.status !== "shutdown") ?? []
+          if (left.length > 0) {
+            throw new Error(`Timed out waiting for shutdown: ${left.map((member) => member.name).join(", ")}`)
+          }
+        }
+      }
+
       const wasDelegate = teamInfo.team.delegate === true
       await Team.cleanup(params.name)
       return {
@@ -1119,11 +1075,16 @@ export const TeamTools = [
   TeamReplyTool,
   TeamBroadcastTool,
   TeamDelegateTool,
+  TeamInboxTool,
+  TeamSubmitResultTool,
+  TeamWaitTool,
   TeamTasksTool,
   TeamClaimTool,
   TeamApprovePlanTool,
+  TeamShutdownAllTool,
   TeamShutdownTool,
   TeamCleanupTool,
+  TeamPhaseTool,
   TeamStatusTool,
   TeamNotepadTool,
   TeamHealthTool,

@@ -158,22 +158,28 @@ export namespace Inbox {
   }
 
   /**
-   * Mark all unread messages as read for an agent.
+   * Mark unread messages as read for an agent.
+   * When ids are provided, only matching unread messages are updated.
    * Returns the newly-read messages so callers can send delivery receipts.
    * Publishes TeamEvent.MessageRead with the count.
    *
    * This is the only operation that rewrites the entire file.
    */
-  export async function markRead(teamName: string, agentName: string): Promise<InboxMessage[]> {
+  export async function markRead(teamName: string, agentName: string, ids?: string[]): Promise<InboxMessage[]> {
     const target = filepath(teamName, agentName)
     using _ = await Lock.write(target)
     const content = await Bun.file(target)
       .text()
       .catch(() => "")
     const messages = (await repair(teamName, agentName, target, content)).messages
-    const read = messages.filter((msg) => !msg.read).map((msg) => ({ ...msg, read: true }))
+    const pick = ids?.length ? new Set(ids) : undefined
+    const read = messages
+      .filter((msg) => !msg.read)
+      .filter((msg) => (pick ? pick.has(msg.id) : true))
+      .map((msg) => ({ ...msg, read: true }))
     if (read.length === 0) return []
-    const next = messages.map((msg) => (msg.read ? msg : { ...msg, read: true }))
+    const seen = new Set(read.map((msg) => msg.id))
+    const next = messages.map((msg) => (seen.has(msg.id) ? { ...msg, read: true } : msg))
     // Rewrite entire file with updated read flags
     await Bun.write(target, serialize(next))
     log.info("inbox marked read", { teamName, agentName, count: read.length })

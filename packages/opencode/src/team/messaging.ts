@@ -53,7 +53,7 @@ function threadId(input: { threadId?: string; replyTo?: string }, id: string) {
 }
 
 export namespace TeamMessaging {
-  async function deliver(sessionID: string, from: string, message: InboxMessage) {
+  async function deliver(teamName: string, to: string, sessionID: string, from: string, message: InboxMessage) {
     let err: unknown
     for (const attempt of [0, 1, 2]) {
       try {
@@ -74,6 +74,13 @@ export namespace TeamMessaging {
         await Bun.sleep(wait)
       }
     }
+    await Bus.publish(TeamEvent.MessageUndelivered, {
+      teamName,
+      from,
+      to,
+      messageID: message.id,
+      error: err instanceof Error ? err.message : String(err),
+    })
     throw err
   }
 
@@ -139,7 +146,7 @@ export namespace TeamMessaging {
     }
 
     if (!queue(status, input.priority)) {
-      await deliver(targetSessionID, input.from, { ...next, read: false })
+      await deliver(input.teamName, input.to, targetSessionID, input.from, { ...next, read: false })
     }
 
     log.info("message sent", { teamName: input.teamName, from: input.from, to: input.to })
@@ -273,7 +280,7 @@ export namespace TeamMessaging {
 
         const senderMember = team.members.find((item) => item.name === sender)
         if (senderMember?.status !== "paused") {
-          await deliver(senderSessionID, agentName, {
+          await deliver(teamName, sender, senderSessionID, agentName, {
             id: receiptId,
             from: agentName,
             text: `[receipt] ${text}`,
@@ -321,7 +328,7 @@ export namespace TeamMessaging {
     let count = 0
     for (const msg of pending) {
       if (delivered.has(msg.id)) continue
-      await deliver(sessionID, msg.from, msg)
+      await deliver(teamName, agentName, sessionID, msg.from, msg)
       count++
     }
 

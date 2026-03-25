@@ -46,6 +46,7 @@ export async function InstanceBootstrap() {
           Log.Default.warn("team recovery failed", { error: err instanceof Error ? err.message : err })
         })
         .finally(() => {
+          Team.trackResults()
           Team.autoCleanup()
           Team.checkpoints()
           Team.monitorCosts()

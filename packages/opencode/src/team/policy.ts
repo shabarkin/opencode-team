@@ -90,6 +90,53 @@ export namespace TeamPolicy {
     return Plugin.trigger("team.conflict.detected", input, { action: "warn" as const })
   }
 
+  /**
+   * Plugin hook for extra scope checks.
+   * Primary enforcement happens via session permission rules set at spawn time.
+   */
+  export async function pathAccess(input: {
+    teamName: string
+    memberName: string
+    filePath: string
+    operation: "read" | "write"
+  }): Promise<{ allow: boolean; reason?: string }> {
+    const { Team } = await import("./index")
+    const { TeamScope } = await import("./scope")
+    const { Session } = await import("../session")
+    const { SessionID } = await import("../session/schema")
+
+    const team = await Team.get(input.teamName)
+    const member = team?.members.find((item) => item.name === input.memberName)
+    if (!team || !member) return { allow: true }
+
+    const scope = TeamScope.merge(team.scope, member.scope)
+    if (!scope.path_excludes?.length && !scope.path_includes?.length) return { allow: true }
+
+    const session = await Session.get(SessionID.make(member.sessionID)).catch(() => undefined)
+    return TeamScope.checkPath(input.filePath, scope, session?.directory ?? member.worktreePath ?? "/")
+  }
+
+  /**
+   * Plugin hook for extra scope checks.
+   * Primary enforcement happens via session permission rules set at spawn time.
+   */
+  export async function bashCommand(input: {
+    teamName: string
+    memberName: string
+    command: string
+  }): Promise<{ allow: boolean; reason?: string }> {
+    const { Team } = await import("./index")
+    const { TeamScope } = await import("./scope")
+
+    const team = await Team.get(input.teamName)
+    const member = team?.members.find((item) => item.name === input.memberName)
+    if (!team || !member) return { allow: true }
+
+    const scope = TeamScope.merge(team.scope, member.scope)
+    if (!scope.bash_allowlist?.length) return { allow: true }
+    return TeamScope.checkBashCommand(input.command, scope)
+  }
+
   export async function checkBudget(
     teamName: string,
   ): Promise<{ action: "continue" | "warn" | "pause_all" | "shutdown_all"; message?: string }> {

@@ -23,6 +23,8 @@ import {
   TeamSpawnTool,
   TeamTasksTool,
 } from "../../src/tool/team"
+import { TeamInboxTool, TeamSubmitResultTool, TeamWaitTool } from "../../src/tool/team-inbox"
+import { TeamPhaseTool, TeamShutdownAllTool } from "../../src/tool/team-lifecycle"
 import { TeamDelegateTool } from "../../src/tool/team-delegate"
 import { TeamNotepadTool } from "../../src/tool/team-notepad"
 import { TeamStatusTool } from "../../src/tool/team-status"
@@ -39,11 +41,16 @@ const ALL_TEAM_TOOL_IDS = [
   TeamReplyTool.id,
   TeamBroadcastTool.id,
   TeamDelegateTool.id,
+  TeamInboxTool.id,
+  TeamSubmitResultTool.id,
+  TeamWaitTool.id,
   TeamTasksTool.id,
   TeamClaimTool.id,
   TeamApprovePlanTool.id,
+  TeamShutdownAllTool.id,
   TeamShutdownTool.id,
   TeamCleanupTool.id,
+  TeamPhaseTool.id,
   TeamStatusTool.id,
   TeamNotepadTool.id,
   TeamHealthTool.id,

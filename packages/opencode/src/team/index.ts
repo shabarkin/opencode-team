@@ -1,4 +1,5 @@
 import z from "zod"
+import path from "path"
 import { Log } from "../util/log"
 import { Bus } from "../bus"
 import { Instance } from "../project/instance"
@@ -12,6 +13,11 @@ import {
   MemberStatus as MemberStatusSchema,
   CheckpointMode,
   ExecutionStatus,
+  ResultStatusSchema,
+  SubmittedResultSchema,
+  TeamScopeSchema,
+  TeamErrorKind,
+  MemberPhase,
   TeamInfoSchema,
   TeamMemberSchema,
   TeamTaskSchema,
@@ -21,11 +27,15 @@ import {
   type TeamTask,
   type MemberStatus,
   type CheckpointMode as CheckpointModeType,
+  type TeamScope as TeamScopeType,
+  type TeamErrorKind as TeamErrorKindType,
+  type MemberPhase as MemberPhaseType,
   type PendingSpawnRequest,
   type ExecutionStatus as ExecutionStatusType,
 } from "./events"
 import { TeamPolicy } from "./policy"
 import { MessageV2 } from "../session/message-v2"
+import { TeamScope } from "./scope"
 
 export {
   TeamEvent,
@@ -33,6 +43,11 @@ export {
   MemberNameSchema,
   CheckpointMode,
   ExecutionStatus,
+  ResultStatusSchema,
+  SubmittedResultSchema,
+  TeamScopeSchema,
+  TeamErrorKind,
+  MemberPhase,
   MessagePriority,
   MessageType,
   type MessagePriority as MessagePriorityType,
@@ -45,6 +60,7 @@ export {
   type TeamInfo,
   type TeamMember,
   type TeamTask,
+  type TeamScope,
   type PendingSpawnRequest,
 } from "./events"
 
@@ -98,6 +114,7 @@ const TERMINAL_EXECUTION_STATES = new Set<ExecutionStatusType>([
 
 const CREATE_LOCK_KEY = () => `team:create:${Instance.project.id}`
 const AUTO_CLEANUP_GRACE = 60_000
+const SHUTDOWN_TIMEOUT = 30_000
 const auto = new Map<string, ReturnType<typeof setTimeout>>()
 const budget = new Map<string, number>()
 const watch = new Map<string, ReturnType<typeof setTimeout>>()
@@ -144,6 +161,139 @@ function clearWatch(name: string) {
   return true
 }
 
+function rulePath(input: string) {
+  return input.replaceAll("\\", "/")
+}
+
+function scopeEmpty(scope?: TeamScopeType) {
+  return !scope?.path_excludes?.length && !scope?.path_includes?.length && !scope?.bash_allowlist?.length
+}
+
+function absoluteRule(dir: string, input: string) {
+  return rulePath(path.resolve(dir, input))
+}
+
+function relativeRule(dir: string, input: string) {
+  return rulePath(path.relative(dir, path.resolve(dir, input)) || ".")
+}
+
+function scopeRules(scope: TeamScopeType | undefined, dir: string): Rule[] {
+  if (scopeEmpty(scope)) return []
+  const rules: Rule[] = []
+  const include = scope?.path_includes ?? []
+  const exclude = scope?.path_excludes ?? []
+
+  if (include.length) {
+    rules.push({ permission: "read", pattern: "**", action: "deny" })
+    rules.push(
+      ...include.map((item) => ({ permission: "read", pattern: absoluteRule(dir, item), action: "allow" as const })),
+    )
+    rules.push({ permission: "edit", pattern: "**", action: "deny" })
+    rules.push(
+      ...include.map((item) => ({ permission: "edit", pattern: relativeRule(dir, item), action: "allow" as const })),
+    )
+  }
+
+  rules.push(
+    ...exclude.flatMap((item) => [
+      { permission: "read", pattern: absoluteRule(dir, item), action: "deny" as const },
+      { permission: "edit", pattern: relativeRule(dir, item), action: "deny" as const },
+    ]),
+  )
+
+  if (scope?.bash_allowlist?.length) {
+    rules.push({ permission: "bash", pattern: "**", action: "deny" })
+    rules.push(...scope.bash_allowlist.map((item) => ({ permission: "bash", pattern: item, action: "allow" as const })))
+  }
+
+  return rules
+}
+
+async function leadDir(leadSessionID: string) {
+  const { Session } = await import("../session")
+  const { SessionID } = await import("../session/schema")
+  const session = await Session.get(SessionID.make(leadSessionID)).catch(() => undefined)
+  return session?.directory ?? Instance.directory
+}
+
+async function removeWorktree(teamName: string, memberName: string) {
+  const team = await Team.get(teamName)
+  const member = team?.members.find((item) => item.name === memberName)
+  if (!team || !member?.worktreePath || !member.worktreeBranch) return
+
+  const { TeamWorktree } = await import("./worktree")
+  await TeamWorktree.remove({
+    repoDir: await leadDir(team.leadSessionID),
+    worktreePath: member.worktreePath,
+    branch: member.worktreeBranch,
+  })
+
+  await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+    const next = draft.members.find((item) => item.name === memberName)
+    if (!next) return
+    delete next.worktreePath
+    delete next.worktreeBranch
+  }).catch(() => undefined)
+}
+
+async function wake(teamName: string, name: string, sessionID: string) {
+  const { SessionPrompt } = await import("../session/prompt")
+  const { SessionStatus } = await import("../session/status")
+  const { SessionID } = await import("../session/schema")
+
+  const sid = SessionID.make(sessionID)
+  const status = await SessionStatus.get(sid)
+  if (status.type !== "idle") return
+
+  SessionPrompt.loop({ sessionID: sid })
+    .then(async () => {
+      const team = await Team.get(teamName)
+      const member = team?.members.find((item) => item.name === name)
+      if (member?.status !== "shutdown_requested") return
+      await Team.transitionMemberStatus(teamName, name, "shutdown")
+    })
+    .catch(() => {})
+}
+
+function timeout(teamName: string, name: string, sessionID: string) {
+  setTimeout(async () => {
+    const team = await Team.get(teamName)
+    const member = team?.members.find((item) => item.name === name)
+    if (!member || member.status === "shutdown") return
+
+    const { SessionPrompt } = await import("../session/prompt")
+    const { SessionID } = await import("../session/schema")
+    await SessionPrompt.cancel(SessionID.make(sessionID))
+    await Team.transitionMemberStatus(teamName, name, "shutdown", { force: true })
+  }, SHUTDOWN_TIMEOUT)
+}
+
+function systemId() {
+  return `im_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+async function noticeLead(teamName: string, text: string, priority: "normal" | "urgent" = "urgent") {
+  const { Inbox } = await import("./inbox")
+  const { TeamMessaging } = await import("./messaging")
+  await Inbox.write(teamName, "lead", {
+    id: systemId(),
+    from: "system",
+    text,
+    timestamp: Date.now(),
+    type: "system",
+    priority,
+  }).catch(() => undefined)
+  await Bus.publish(TeamEvent.Message, {
+    teamName,
+    from: "system",
+    to: "lead",
+    text,
+    type: "system",
+    priority,
+  }).catch(() => undefined)
+  await TeamMessaging.flush(teamName, "lead").catch(() => undefined)
+}
+
 const MEMBER_TRANSITIONS: Record<MemberStatus, MemberStatus[]> = {
   ready: ["busy", "paused", "shutdown_requested", "shutdown", "error"],
   busy: ["ready", "paused", "shutdown_requested", "error"],
@@ -180,6 +330,15 @@ function normalizeMember(member: TeamMember): TeamMember {
     checkpoint: CheckpointMode.safeParse(member.checkpoint).success ? member.checkpoint : "none",
     activeDelegations: Math.max(0, member.activeDelegations ?? 0),
     maxCost: typeof member.maxCost === "number" && Number.isFinite(member.maxCost) ? member.maxCost : undefined,
+    worktreePath: typeof member.worktreePath === "string" ? member.worktreePath : undefined,
+    worktreeBranch: typeof member.worktreeBranch === "string" ? member.worktreeBranch : undefined,
+    scope: TeamScopeSchema.safeParse(member.scope).success ? member.scope : undefined,
+    phase: MemberPhase.safeParse(member.phase).success ? member.phase : undefined,
+    last_result_at:
+      typeof member.last_result_at === "number" && Number.isFinite(member.last_result_at)
+        ? member.last_result_at
+        : undefined,
+    error_kind: TeamErrorKind.safeParse(member.error_kind).success ? member.error_kind : undefined,
   }
 }
 
@@ -188,6 +347,7 @@ function normalizeTeam(team: TeamInfo): TeamInfo {
     ...team,
     members: team.members.map(normalizeMember),
     maxCost: typeof team.maxCost === "number" && Number.isFinite(team.maxCost) ? team.maxCost : undefined,
+    scope: TeamScopeSchema.safeParse(team.scope).success ? team.scope : undefined,
     pending_spawn_requests: (team.pending_spawn_requests ?? []).map((item) => PendingSpawnRequestSchema.parse(item)),
   }
 }
@@ -302,6 +462,12 @@ export namespace Team {
       offStatus()
       offCleaned()
     }
+  }
+
+  export function trackResults() {
+    return Bus.subscribe(TeamEvent.ResultSubmitted, async (event) => {
+      await setMemberResultAt(event.properties.teamName, event.properties.memberName, Date.now())
+    })
   }
 
   /**
@@ -453,6 +619,7 @@ export namespace Team {
         runtime = next.started ? Math.max(0, Date.now() - next.started) : 0
         member.status = status
         member.updated = Date.now()
+        if (status !== "error") delete member.error_kind
         changed = true
       })
     } catch {
@@ -460,6 +627,15 @@ export namespace Team {
     }
     if (!changed) return false
     await Bus.publish(TeamEvent.MemberStatusChanged, { teamName, memberName, status })
+    if (status === "shutdown") {
+      await removeWorktree(teamName, memberName).catch((err: unknown) => {
+        log.warn("failed to remove teammate worktree", {
+          teamName,
+          memberName,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      })
+    }
     if (status === "ready") {
       await TeamPolicy.memberIdle({
         teamName,
@@ -562,6 +738,53 @@ export namespace Team {
         const member = draft.members.find((m) => m.name === memberName)
         if (!member) return
         member.checkpoint = mode
+      })
+    } catch {
+      // Team not found — ignore
+    }
+  }
+
+  export async function setMemberPhase(teamName: string, memberName: string, phase: MemberPhaseType): Promise<void> {
+    try {
+      await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+        const member = draft.members.find((item) => item.name === memberName)
+        if (!member) return
+        member.phase = phase
+        member.updated = Date.now()
+      })
+    } catch {
+      // Team not found — ignore
+    }
+  }
+
+  export async function setMemberErrorKind(
+    teamName: string,
+    memberName: string,
+    errorKind: TeamErrorKindType | undefined,
+  ): Promise<void> {
+    try {
+      await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+        const member = draft.members.find((item) => item.name === memberName)
+        if (!member) return
+        if (!errorKind) {
+          delete member.error_kind
+        } else {
+          member.error_kind = errorKind
+        }
+        member.updated = Date.now()
+      })
+    } catch {
+      // Team not found — ignore
+    }
+  }
+
+  export async function setMemberResultAt(teamName: string, memberName: string, time: number): Promise<void> {
+    try {
+      await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+        const member = draft.members.find((item) => item.name === memberName)
+        if (!member) return
+        member.last_result_at = time
+        member.updated = Date.now()
       })
     } catch {
       // Team not found — ignore
@@ -844,6 +1067,7 @@ export namespace Team {
     timeout?: number
     maxCost?: number
     maxTokens?: number
+    scope?: TeamScopeType
   }): Promise<{ sessionID: string; label: string }> {
     const { Session } = await import("../session")
     const { SessionPrompt } = await import("../session/prompt")
@@ -865,14 +1089,31 @@ export namespace Team {
       throw new Error(spawn.reason ?? `Spawning teammate "${input.name}" was denied by team policy.`)
     }
 
+    const scope = TeamScope.merge(team.scope, input.scope)
+    const { TeamWorktree } = await import("./worktree")
+    const tree = await TeamWorktree.create({
+      repoDir: Inst.directory,
+      teamName: input.teamName,
+      memberName: input.name,
+      projectID: Inst.project.id,
+    })
+    if (!tree) {
+      log.warn("team worktree unavailable, falling back to shared directory", {
+        teamName: input.teamName,
+        memberName: input.name,
+        directory: Inst.directory,
+      })
+    }
+
     // Build permission rules for the child session
-    const rules: Array<{ permission: string; pattern: string; action: "deny" | "allow" }> = [
+    const rules: Rule[] = [
       { permission: "team_create", pattern: "*", action: "deny" },
       { permission: "team_spawn", pattern: "*", action: "deny" },
       { permission: "team_shutdown", pattern: "*", action: "deny" },
       { permission: "team_cleanup", pattern: "*", action: "deny" },
       { permission: "team_approve_plan", pattern: "*", action: "deny" },
     ]
+    rules.push(...scopeRules(scope, tree?.path ?? Inst.directory))
     if (input.planApproval) {
       // Pattern "*:plan-approval" is intentionally NOT "*" — PermissionNext.disabled() only
       // strips tools with pattern "*", so these remain visible to the model but are denied at
@@ -885,9 +1126,18 @@ export namespace Team {
     const { SessionID } = await import("../session/schema")
     const session = await Session.createNext({
       parentID: SessionID.make(input.parentSessionID),
-      directory: Inst.directory,
+      directory: tree?.path ?? Inst.directory,
       title: `${input.name} (@${input.agent.name} teammate, ${label})${input.planApproval ? " [plan mode]" : ""}`,
       permission: rules,
+    }).catch(async (err: unknown) => {
+      if (tree) {
+        await TeamWorktree.remove({
+          repoDir: Inst.directory,
+          worktreePath: tree.path,
+          branch: tree.branch,
+        }).catch(() => undefined)
+      }
+      throw err
     })
 
     // Register member — if this fails, clean up the orphaned session
@@ -905,6 +1155,9 @@ export namespace Team {
         checkpoint: input.checkpoint,
         activeDelegations: 0,
         maxCost: input.maxCost,
+        worktreePath: tree?.path,
+        worktreeBranch: tree?.branch,
+        scope: input.scope,
       })
     } catch (err) {
       // Orphaned session cleanup
@@ -912,6 +1165,13 @@ export namespace Team {
         await Session.remove(session.id)
       } catch {
         log.warn("failed to clean up orphaned session", { sessionID: session.id })
+      }
+      if (tree) {
+        await TeamWorktree.remove({
+          repoDir: Inst.directory,
+          worktreePath: tree.path,
+          branch: tree.branch,
+        }).catch(() => undefined)
       }
       throw err
     }
@@ -997,9 +1257,13 @@ export namespace Team {
       "- team_broadcast: send a message to all teammates",
       "- team_request_spawn: ask the lead to add another specialist when needed",
       "- team_delegate: run a lightweight child subagent and get the result back privately",
+      "- team_inbox: read your inbox or flush undelivered team messages",
+      "- team_submit_result: send a structured task result to the lead",
+      "- team_wait: check if a team condition has been met without blocking",
       "- team_tasks: view/add/complete tasks on the shared task list",
       "- team_claim: claim a pending task from the shared task list",
       "- team_notepad: read/write shared team knowledge",
+      "- team_phase: report your current work phase to the lead",
       "- team_status: see full team state",
       "",
       "You do NOT have access to team_create, team_spawn, team_shutdown, or team_cleanup.",
@@ -1011,7 +1275,8 @@ export namespace Team {
       ...taskSummary,
       ...budgetInfo,
       ...(notepadCtx ? [notepadCtx] : []),
-      "When you finish a task, mark it done with team_tasks and send a summary to the lead with team_message.",
+      "When you finish a task, prefer team_submit_result to send a structured report to the lead.",
+      "Use team_message for follow-ups, questions, and coordination that are not final task results.",
       "You can message any teammate by name — not just the lead. Coordinate directly with peers when useful.",
       "",
       "SUBAGENT RELAY: If you use the task tool to spawn subagents, they CANNOT communicate with the team.",
@@ -1060,6 +1325,8 @@ export namespace Team {
       timeoutHandle = setTimeout(async () => {
         log.warn("teammate timeout", { teamName: input.teamName, name: input.name, timeout: input.timeout })
         await transitionExecutionStatus(input.teamName, input.name, "timed_out")
+        await transitionMemberStatus(input.teamName, input.name, "error", { force: true })
+        await setMemberErrorKind(input.teamName, input.name, "timeout")
         SessionPrompt.cancel(session.id)
         await Bus.publish(TeamEvent.MemberTimeout, {
           teamName: input.teamName,
@@ -1101,11 +1368,23 @@ export namespace Team {
       })
       .catch(async (err) => {
         if (timeoutHandle) clearTimeout(timeoutHandle)
-        log.warn("teammate loop error", { teamName: input.teamName, name: input.name, error: err.message })
+        const msg = err instanceof Error ? err.message : String(err)
+        log.warn("teammate loop error", { teamName: input.teamName, name: input.name, error: msg })
+
+        const team = await get(input.teamName)
+        const member = team?.members.find((item) => item.name === input.name)
+        if (member?.execution_status === "timed_out") {
+          await setMemberErrorKind(input.teamName, input.name, "timeout")
+          await transitionMemberStatus(input.teamName, input.name, "error", { force: true })
+          await notifyLead(input.teamName, input.name, session.id, "errored", msg)
+          return
+        }
+
         await transitionExecutionStatus(input.teamName, input.name, "failed")
         await transitionExecutionStatus(input.teamName, input.name, "idle")
+        await setMemberErrorKind(input.teamName, input.name, "member_crashed")
         await transitionMemberStatus(input.teamName, input.name, "error")
-        await notifyLead(input.teamName, input.name, session.id, "errored", err.message)
+        await notifyLead(input.teamName, input.name, session.id, "errored", msg)
       })
 
     await TeamPolicy.memberSpawned({
@@ -1199,6 +1478,79 @@ export namespace Team {
     })
   }
 
+  export async function shutdown(input: {
+    teamName: string
+    memberName: string
+    reason?: string
+  }): Promise<
+    | { status: "not_found" }
+    | { status: "already_shutdown" }
+    | { status: "blocked"; reason?: string }
+    | { status: "requested" }
+  > {
+    const { TeamMessaging } = await import("./messaging")
+    const { SessionPrompt } = await import("../session/prompt")
+    const { SessionID } = await import("../session/schema")
+
+    const team = await get(input.teamName)
+    const member = team?.members.find((item) => item.name === input.memberName)
+    if (!team || !member) return { status: "not_found" }
+    if (member.status === "shutdown") return { status: "already_shutdown" }
+
+    const tasks = await TeamTasks.list(input.teamName)
+    const guard = await TeamPolicy.shutdownBefore({
+      teamName: input.teamName,
+      name: input.memberName,
+      tasksRemaining: tasks.filter(
+        (task) => task.assignee === input.memberName && task.status !== "completed" && task.status !== "cancelled",
+      ).length,
+    })
+    if (!guard.allow) {
+      return {
+        status: "blocked",
+        reason: guard.reason ?? `Team policy blocked shutdown for "${input.memberName}".`,
+      }
+    }
+
+    const status = member.status
+    await transitionMemberStatus(input.teamName, input.memberName, "shutdown_requested")
+    await Bus.publish(TeamEvent.ShutdownRequest, {
+      teamName: input.teamName,
+      memberName: input.memberName,
+    })
+
+    const sent = await TeamMessaging.send({
+      teamName: input.teamName,
+      from: "lead",
+      to: input.memberName,
+      text: [
+        `SHUTDOWN REQUEST: ${input.reason ?? "The lead has requested you shut down."}`,
+        "",
+        "Please wrap up your current work:",
+        "1. Summarize your findings and send them to the lead.",
+        "2. Stop working after sending your summary.",
+      ].join("\n"),
+    }).then(
+      () => true,
+      async () => {
+        await SessionPrompt.cancel(SessionID.make(member.sessionID))
+        await transitionMemberStatus(input.teamName, input.memberName, "shutdown")
+        return false
+      },
+    )
+
+    if (status === "busy") {
+      await Team.cancelMember(input.teamName, input.memberName)
+    }
+
+    if (sent) {
+      await wake(input.teamName, input.memberName, member.sessionID)
+      timeout(input.teamName, input.memberName, member.sessionID)
+    }
+
+    return { status: "requested" }
+  }
+
   export async function steer(input: {
     teamName: string
     memberName: string
@@ -1274,6 +1626,7 @@ export namespace Team {
         from: name,
         to: "lead",
         text,
+        metadata: status === "completed" ? { completionStatus: status } : undefined,
       })
     } catch (err: unknown) {
       log.warn("failed to notify lead of teammate completion", {
@@ -1304,6 +1657,7 @@ export namespace Team {
     const { Inbox } = await import("./inbox")
     const { TeamNotepad } = await import("./notepad")
     const { removeEdits } = await import("./files")
+    const { TeamWorktree } = await import("./worktree")
     await Inbox.removeAll(
       teamName,
       team.members.map((m) => m.name),
@@ -1312,6 +1666,14 @@ export namespace Team {
     removeEdits(teamName)
     await Storage.remove(configKey(teamName))
     await Storage.remove(tasksKey(teamName))
+    await TeamWorktree.removeAll({
+      repoDir: await leadDir(team.leadSessionID),
+      entries: team.members.flatMap((member) =>
+        member.worktreePath && member.worktreeBranch
+          ? [{ worktreePath: member.worktreePath, branch: member.worktreeBranch }]
+          : [],
+      ),
+    })
     budget.delete(budgetKey(teamName))
     clearWatch(teamName)
 
@@ -1433,24 +1795,29 @@ export namespace Team {
       const info = await findBySession(sessionID)
       const teamName = info?.team.name ?? (await trace(sessionID))?.parentTeam
       if (!teamName) return
+      const run = () =>
+        checkBudget(teamName).catch((err: unknown) => {
+          log.warn("budget monitor failed", {
+            teamName,
+            error: err instanceof Error ? err.message : String(err),
+          })
+        })
       clearWatch(teamName)
+      if (delay <= 10) void run()
       watch.set(
         watchKey(teamName),
         setTimeout(() => {
           watch.delete(watchKey(teamName))
-          checkBudget(teamName).catch((err: unknown) => {
-            log.warn("budget monitor failed", {
-              teamName,
-              error: err instanceof Error ? err.message : String(err),
-            })
-          })
+          void run()
         }, delay),
       )
     }
 
     const offMessage = Bus.subscribe(MessageV2.Event.Updated, (event) => {
       if (event.properties.info.role !== "assistant") return
-      void queue(event.properties.info.sessionID)
+      setTimeout(() => {
+        void queue(event.properties.info.sessionID)
+      }, 0)
     })
     const offClean = Bus.subscribe(TeamEvent.Cleaned, (event) => {
       clearWatch(event.properties.teamName)
@@ -1466,7 +1833,6 @@ export namespace Team {
     const team = await get(teamName)
     if (!team) return
 
-    const { TeamMessaging } = await import("./messaging")
     const costs = await cost(teamName)
     for (const member of team.members) {
       if (!member.maxCost) continue
@@ -1478,18 +1844,11 @@ export namespace Team {
         memberName: member.name,
         reason: `Cost limit reached ($${spend.toFixed(2)} / $${member.maxCost.toFixed(2)})`,
       }).catch(() => {})
-      await TeamMessaging.send({
+      await noticeLead(
         teamName,
-        from: "system",
-        to: "lead",
-        text: `Budget pause: "${member.name}" reached $${spend.toFixed(2)} of its $${member.maxCost.toFixed(2)} limit.`,
-        type: "system",
-        priority: "urgent",
-      }).catch(() => {})
+        `Budget pause: "${member.name}" reached $${spend.toFixed(2)} of its $${member.maxCost.toFixed(2)} limit.`,
+      )
     }
-
-    const hook = await TeamPolicy.checkBudget(teamName)
-    if (hook.action !== "continue") return
 
     const cap = team.maxCost ?? team.members.reduce((sum, member) => sum + (member.maxCost ?? 0), 0)
     const key = budgetKey(teamName)
@@ -1504,30 +1863,19 @@ export namespace Team {
       budget.set(key, 2)
       const text = `Team budget paused all members at $${costs.total.cost.toFixed(2)} / $${cap.toFixed(2)}.`
       await pauseAll(teamName, text)
-      await TeamMessaging.send({
-        teamName,
-        from: "system",
-        to: "lead",
-        text,
-        type: "system",
-        priority: "urgent",
-      }).catch(() => {})
+      await noticeLead(teamName, text)
       return
     }
 
     if (costs.total.cost >= cap * 0.8) {
       if (level >= 1) return
       budget.set(key, 1)
-      await TeamMessaging.send({
-        teamName,
-        from: "system",
-        to: "lead",
-        text: `Team budget warning: $${costs.total.cost.toFixed(2)} of $${cap.toFixed(2)} used.`,
-        type: "system",
-        priority: "urgent",
-      }).catch(() => {})
+      await noticeLead(teamName, `Team budget warning: $${costs.total.cost.toFixed(2)} of $${cap.toFixed(2)} used.`)
       return
     }
+
+    const hook = await TeamPolicy.checkBudget(teamName)
+    if (hook.action !== "continue") return
 
     budget.set(key, 0)
   }

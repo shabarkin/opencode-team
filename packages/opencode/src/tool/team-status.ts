@@ -40,13 +40,19 @@ export const TeamStatusTool = Tool.define("team_status", {
           `status=${m.status}`,
           `exec=${m.execution_status ?? "idle"}`,
           m.model ?? "",
+          m.worktreeBranch ? `worktree=${m.worktreeBranch}` : "",
+          m.phase ? `phase=${m.phase}` : "",
           m.planApproval && m.planApproval !== "none" ? `plan=${m.planApproval}` : "",
           m.checkpoint && m.checkpoint !== "none" ? `checkpoint=${m.checkpoint}` : "",
           m.activeDelegations ? `delegations=${m.activeDelegations}` : "",
+          m.last_result_at ? `last_result=${new Date(m.last_result_at).toISOString()}` : "",
+          m.error_kind ? `error_kind=${m.error_kind}` : "",
           spend > 0 ? `cost=${money(spend)}` : "",
           usage ? `budget=${usage}` : "",
           unread.length > 0 ? `${unread.length} unread` : "",
           `${mins}m`,
+          m.status === "error" ? "→ team_restart or team_shutdown" : "",
+          m.execution_status === "timed_out" ? "→ review session log" : "",
         ]
           .filter(Boolean)
           .join(" | ")
