@@ -13,6 +13,8 @@ import type { MessagePriority, MessageType } from "./events"
 const log = Log.create({ service: "team.messaging" })
 const MAX_TEXT = 10 * 1024
 const TEAM_MESSAGE = true
+const RETRY = 3
+const RETRY_MS = 50
 
 function closing(status?: string) {
   return status === "shutdown" || status === "shutdown_requested"
@@ -25,6 +27,14 @@ function validateText(text: string) {
 
 function messageId(): string {
   return `im_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+function sessionMessageId(id: string) {
+  return MessageID.make(`msg_${id}`)
+}
+
+function sessionPartId(id: string) {
+  return PartID.make(`prt_${id}`)
 }
 
 function priorityText(text: string, priority?: MessagePriority) {
@@ -43,6 +53,30 @@ function threadId(input: { threadId?: string; replyTo?: string }, id: string) {
 }
 
 export namespace TeamMessaging {
+  async function deliver(sessionID: string, from: string, message: InboxMessage) {
+    let err: unknown
+    for (const attempt of [0, 1, 2]) {
+      try {
+        await injectMessage(sessionID, from, message)
+        return
+      } catch (next) {
+        err = next
+        if (attempt === RETRY - 1) break
+        const wait = RETRY_MS * 2 ** attempt
+        log.warn("message inject failed, retrying", {
+          sessionID,
+          from,
+          inboxMessageId: message.id,
+          attempt: attempt + 1,
+          wait,
+          error: next instanceof Error ? next.message : String(next),
+        })
+        await Bun.sleep(wait)
+      }
+    }
+    throw err
+  }
+
   /**
    * Send a message from one team member to another.
    * Writes to the recipient's inbox (source of truth), then injects
@@ -105,7 +139,7 @@ export namespace TeamMessaging {
     }
 
     if (!queue(status, input.priority)) {
-      await injectMessage(targetSessionID, input.from, next)
+      await deliver(targetSessionID, input.from, { ...next, read: false })
     }
 
     log.info("message sent", { teamName: input.teamName, from: input.from, to: input.to })
@@ -239,9 +273,12 @@ export namespace TeamMessaging {
 
         const senderMember = team.members.find((item) => item.name === sender)
         if (senderMember?.status !== "paused") {
-          await injectMessage(senderSessionID, agentName, {
+          await deliver(senderSessionID, agentName, {
             id: receiptId,
+            from: agentName,
             text: `[receipt] ${text}`,
+            timestamp: Date.now(),
+            read: false,
             type: "system",
             priority: "low",
             threadId: receiptId,
@@ -284,7 +321,7 @@ export namespace TeamMessaging {
     let count = 0
     for (const msg of pending) {
       if (delivered.has(msg.id)) continue
-      await injectMessage(sessionID, msg.from, msg)
+      await deliver(sessionID, msg.from, msg)
       count++
     }
 
@@ -382,7 +419,7 @@ export namespace TeamMessaging {
     }
     const userInfo = lastUser.info as { agent: string; model: { providerID: string; modelID: string } }
 
-    const msgId = MessageID.ascending()
+    const msgId = sessionMessageId(message.id)
     await Session.updateMessage({
       id: msgId,
       sessionID: sid,
@@ -396,7 +433,7 @@ export namespace TeamMessaging {
     })
 
     await Session.updatePart({
-      id: PartID.ascending(),
+      id: sessionPartId(message.id),
       messageID: msgId,
       sessionID: sid,
       type: "text",

@@ -4,9 +4,15 @@ import { Global } from "../global"
 import { Instance } from "../project/instance"
 import { Bus } from "../bus"
 import { TeamEvent } from "./events"
-import type { MessagePriority, MessageType } from "./events"
+import {
+  MessagePriority,
+  MessageType,
+  type MessagePriority as MessagePriorityType,
+  type MessageType as MessageTypeType,
+} from "./events"
 import path from "path"
 import fs from "fs/promises"
+import z from "zod"
 
 const log = Log.create({ service: "team.inbox" })
 
@@ -16,38 +22,115 @@ export interface InboxMessage {
   text: string
   timestamp: number
   read: boolean
-  type?: MessageType
-  priority?: MessagePriority
+  type?: MessageTypeType
+  priority?: MessagePriorityType
   threadId?: string
   replyTo?: string
   metadata?: Record<string, unknown>
 }
+
+const MessageSchema = z.object({
+  id: z.string(),
+  from: z.string(),
+  text: z.string(),
+  timestamp: z.number().finite(),
+  read: z.boolean(),
+  type: MessageType.optional(),
+  priority: MessagePriority.optional(),
+  threadId: z.string().optional(),
+  replyTo: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+})
 
 /** Resolve the JSONL file path for an agent's inbox */
 function filepath(teamName: string, agentName: string): string {
   return path.join(Global.Path.data, "storage", "team_inbox", Instance.project.id, teamName, agentName + ".jsonl")
 }
 
-/** Parse a JSONL file into an array of InboxMessage */
-function parse(content: string): InboxMessage[] {
-  if (!content.trim()) return []
-  return content
+function quarantinepath(teamName: string, agentName: string): string {
+  return path.join(
+    Global.Path.data,
+    "storage",
+    "team_inbox",
+    Instance.project.id,
+    teamName,
+    agentName + ".quarantine.jsonl",
+  )
+}
+
+function inspect(content: string) {
+  const seen = new Set<string>()
+  const invalid = [] as string[]
+  const messages = content
     .split("\n")
     .filter((line) => line.trim())
-    .map((line) => JSON.parse(line) as InboxMessage)
+    .flatMap((line) => {
+      try {
+        const parsed = MessageSchema.parse(JSON.parse(line))
+        if (seen.has(parsed.id)) {
+          invalid.push(line)
+          return []
+        }
+        seen.add(parsed.id)
+        return [parsed]
+      } catch {
+        invalid.push(line)
+        return []
+      }
+    })
+  return { messages, invalid }
+}
+
+function serialize(messages: InboxMessage[]) {
+  if (messages.length === 0) return ""
+  return messages.map((msg) => JSON.stringify(msg)).join("\n") + "\n"
+}
+
+async function repair(teamName: string, agentName: string, target: string, content: string) {
+  const parsed = inspect(content)
+  if (parsed.invalid.length === 0) return parsed
+  const qpath = quarantinepath(teamName, agentName)
+  await fs.mkdir(path.dirname(target), { recursive: true })
+  await fs.appendFile(qpath, parsed.invalid.join("\n") + "\n")
+  await Bun.write(target, serialize(parsed.messages))
+  log.warn("inbox validated", {
+    teamName,
+    agentName,
+    valid: parsed.messages.length,
+    invalid: parsed.invalid.length,
+  })
+  return parsed
 }
 
 export namespace Inbox {
   /**
    * Write a message to an agent's inbox.
-   * Appends a single JSON line — O(1), no read-modify-write.
+   * Deduplicates by inbox message ID and self-heals malformed files before append.
    */
   export async function write(teamName: string, to: string, message: Omit<InboxMessage, "read">): Promise<void> {
     const target = filepath(teamName, to)
     using _ = await Lock.write(target)
     await fs.mkdir(path.dirname(target), { recursive: true })
+    const content = await Bun.file(target)
+      .text()
+      .catch(() => "")
+    const parsed = await repair(teamName, to, target, content)
+    if (parsed.messages.some((item) => item.id === message.id)) {
+      log.info("duplicate inbox write skipped", { teamName, to, from: message.from, id: message.id })
+      return
+    }
     await fs.appendFile(target, JSON.stringify({ ...message, read: false }) + "\n")
     log.info("inbox write", { teamName, to, from: message.from, id: message.id })
+  }
+
+  export async function validate(teamName: string, agentName: string): Promise<{ valid: number; invalid: number }> {
+    const target = filepath(teamName, agentName)
+    using _ = await Lock.write(target)
+    const content = await Bun.file(target)
+      .text()
+      .catch(() => "")
+    const parsed = await repair(teamName, agentName, target, content)
+    return { valid: parsed.messages.length, invalid: parsed.invalid.length }
   }
 
   /**
@@ -59,7 +142,7 @@ export namespace Inbox {
     const content = await Bun.file(target)
       .text()
       .catch(() => "")
-    return parse(content).filter((m) => !m.read)
+    return inspect(content).messages.filter((m) => !m.read)
   }
 
   /**
@@ -71,7 +154,7 @@ export namespace Inbox {
     const content = await Bun.file(target)
       .text()
       .catch(() => "")
-    return parse(content)
+    return inspect(content).messages
   }
 
   /**
@@ -87,12 +170,12 @@ export namespace Inbox {
     const content = await Bun.file(target)
       .text()
       .catch(() => "")
-    const messages = parse(content)
+    const messages = (await repair(teamName, agentName, target, content)).messages
     const read = messages.filter((msg) => !msg.read).map((msg) => ({ ...msg, read: true }))
     if (read.length === 0) return []
     const next = messages.map((msg) => (msg.read ? msg : { ...msg, read: true }))
     // Rewrite entire file with updated read flags
-    await Bun.write(target, next.map((msg) => JSON.stringify(msg)).join("\n") + "\n")
+    await Bun.write(target, serialize(next))
     log.info("inbox marked read", { teamName, agentName, count: read.length })
     await Bus.publish(TeamEvent.MessageRead, { teamName, agentName, count: read.length })
     return read
@@ -103,7 +186,9 @@ export namespace Inbox {
    */
   export async function remove(teamName: string, agentName: string): Promise<void> {
     const target = filepath(teamName, agentName)
+    const qpath = quarantinepath(teamName, agentName)
     await fs.unlink(target).catch(() => {})
+    await fs.unlink(qpath).catch(() => {})
   }
 
   /**
@@ -131,7 +216,7 @@ export namespace Inbox {
     const content = await Bun.file(target)
       .text()
       .catch(() => "")
-    const messages = parse(content)
+    const messages = (await repair(teamName, agentName, target, content)).messages
     if (messages.length <= MAX_MESSAGES / 2) return 0
 
     const now = Date.now()
@@ -146,7 +231,7 @@ export namespace Inbox {
     const removed = messages.length - final.length
     if (removed === 0) return 0
 
-    await Bun.write(target, final.map((m) => JSON.stringify(m)).join("\n") + "\n")
+    await Bun.write(target, serialize(final))
     log.info("inbox pruned", { teamName, agentName, removed, remaining: final.length })
 
     await Bus.publish(TeamEvent.InboxPruned, { teamName, agentName, removed })

@@ -213,6 +213,24 @@ function canTransition<T extends string>(current: T, next: T, map: Record<T, T[]
   return map[current]?.includes(next) === true
 }
 
+function sessionMeta(text: string) {
+  const head = text.match(/You are "([^"]+)", a teammate in team "([^"]+)"\./)
+  if (!head) return
+  const member = MemberNameSchema.safeParse(head[1])
+  const team = TeamNameSchema.safeParse(head[2])
+  if (!member.success || !team.success) return
+  const agent = text.match(/Your agent type is "([^"]+)"/)?.[1] ?? "general"
+  const model = text.match(/using model ([^\.]+)\./)?.[1]
+  const prompt = text.split("\nYour instructions:\n")[1]?.trim() || undefined
+  return {
+    name: member.data,
+    teamName: team.data,
+    agent,
+    model,
+    prompt,
+  }
+}
+
 export namespace Team {
   export function cancelAutoCleanup(teamName?: string) {
     if (teamName) return clearAuto(teamName)
@@ -1589,6 +1607,83 @@ export namespace Team {
    * Called once during InstanceBootstrap.
    */
   export async function recover(): Promise<{ interrupted: number }> {
+    const { Session } = await import("../session")
+    const { SessionID } = await import("../session/schema")
+    const { Inbox } = await import("./inbox")
+
+    const known = new Set(
+      (await list()).flatMap((team) => [team.leadSessionID, ...team.members.map((member) => member.sessionID)]),
+    )
+    for (const session of Session.list({ limit: 10_000 })) {
+      if (known.has(session.id)) continue
+      if (!session.parentID) continue
+      if (!session.title.includes(" teammate")) continue
+      const msgs = await Session.messages({ sessionID: SessionID.make(session.id), limit: 20 }).catch(() => [])
+      const text = msgs
+        .find((msg) => msg.info.role === "user")
+        ?.parts.flatMap((part) => (part.type === "text" ? [part.text] : []))
+        .join("\n")
+      if (!text) continue
+      const meta = sessionMeta(text)
+      if (!meta) continue
+      let team = await get(meta.teamName)
+      if (!team) {
+        const tasks = await Storage.read<TeamTask[]>(tasksKey(meta.teamName))
+          .then(() => true)
+          .catch(() => false)
+        const memberInbox = await Inbox.all(meta.teamName, meta.name).then((items) => items.length > 0)
+        const leadInbox = await Inbox.all(meta.teamName, "lead").then((items) => items.length > 0)
+        if (!tasks && !memberInbox && !leadInbox) continue
+        team = await create({
+          name: meta.teamName,
+          leadSessionID: session.parentID,
+        }).catch((err: unknown) => {
+          log.warn("failed to recreate orphaned team config", {
+            teamName: meta.teamName,
+            sessionID: session.id,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          return undefined
+        })
+      }
+      if (!team) continue
+      if (team.leadSessionID !== session.parentID) {
+        log.warn("skipping orphaned teammate with mismatched lead", {
+          teamName: meta.teamName,
+          sessionID: session.id,
+          leadSessionID: session.parentID,
+          expectedLeadSessionID: team.leadSessionID,
+        })
+        continue
+      }
+      if (team.members.some((member) => member.sessionID === session.id || member.name === meta.name)) {
+        known.add(session.id)
+        continue
+      }
+      const added = await addMember(meta.teamName, {
+        name: meta.name,
+        sessionID: session.id,
+        agent: meta.agent,
+        status: "ready",
+        execution_status: "idle",
+        updated: Date.now(),
+        prompt: meta.prompt,
+        model: meta.model,
+        planApproval: session.permission?.some((rule) => rule.pattern === "*:plan-approval") ? "pending" : "none",
+        checkpoint: "none",
+        activeDelegations: 0,
+      }).catch((err: unknown) => {
+        log.warn("failed to reconcile orphaned teammate", {
+          teamName: meta.teamName,
+          memberName: meta.name,
+          sessionID: session.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return false
+      })
+      if (added !== false) known.add(session.id)
+    }
+
     const teams = await list()
     let count = 0
 
@@ -1603,8 +1698,10 @@ export namespace Team {
       try {
         const { TeamMessaging } = await import("./messaging")
         for (const member of live) {
+          await Inbox.validate(team.name, member.name)
           await TeamMessaging.recoverInbox(team.name, member.name, member.sessionID)
         }
+        await Inbox.validate(team.name, "lead")
         await TeamMessaging.recoverInbox(team.name, "lead", team.leadSessionID)
       } catch (err: unknown) {
         log.warn("inbox recovery failed", {
