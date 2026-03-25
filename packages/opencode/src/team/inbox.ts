@@ -26,6 +26,8 @@ export interface InboxMessage {
   priority?: MessagePriorityType
   threadId?: string
   replyTo?: string
+  sessionMessageID?: string
+  sessionPartID?: string
   metadata?: Record<string, unknown>
 }
 
@@ -39,6 +41,8 @@ const MessageSchema = z.object({
   priority: MessagePriority.optional(),
   threadId: z.string().optional(),
   replyTo: z.string().optional(),
+  sessionMessageID: z.string().optional(),
+  sessionPartID: z.string().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
 })
 

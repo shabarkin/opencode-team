@@ -37,6 +37,13 @@ function sessionPartId(id: string) {
   return PartID.make(`prt_${id}`)
 }
 
+function refs() {
+  return {
+    sessionMessageID: MessageID.ascending(),
+    sessionPartID: PartID.ascending(),
+  }
+}
+
 function priorityText(text: string, priority?: MessagePriority) {
   if (priority !== "urgent") return text
   if (text.startsWith("[URGENT]")) return text
@@ -140,6 +147,7 @@ export namespace TeamMessaging {
       priority: input.priority,
       threadId: threadId(input, inboxId),
       replyTo: input.replyTo,
+      ...refs(),
       metadata: input.metadata,
     }
     await Inbox.write(input.teamName, input.to, {
@@ -279,6 +287,7 @@ export namespace TeamMessaging {
           type: "system",
           priority: "low",
           threadId: receiptId,
+          ...refs(),
         }).catch((err: unknown) => {
           log.warn("receipt inbox write failed", {
             teamName,
@@ -298,6 +307,7 @@ export namespace TeamMessaging {
             type: "system",
             priority: "low",
             threadId: receiptId,
+            ...refs(),
           }).catch((err: unknown) => {
             log.warn("receipt inject failed", {
               teamName,
@@ -423,7 +433,19 @@ export namespace TeamMessaging {
   async function injectMessage(
     sessionID: string,
     fromName: string,
-    message: Pick<InboxMessage, "id" | "text" | "type" | "priority" | "threadId" | "replyTo" | "metadata">,
+    message: Pick<
+      InboxMessage,
+      | "id"
+      | "text"
+      | "timestamp"
+      | "type"
+      | "priority"
+      | "threadId"
+      | "replyTo"
+      | "sessionMessageID"
+      | "sessionPartID"
+      | "metadata"
+    >,
   ): Promise<void> {
     // Get the session to find the current agent and model
     // Don't limit — we need to find the last user message which may not be the most recent
@@ -435,7 +457,7 @@ export namespace TeamMessaging {
     }
     const userInfo = lastUser.info as { agent: string; model: { providerID: string; modelID: string } }
 
-    const msgId = sessionMessageId(message.id)
+    const msgId = message.sessionMessageID ? MessageID.make(message.sessionMessageID) : sessionMessageId(message.id)
     await Session.updateMessage({
       id: msgId,
       sessionID: sid,
@@ -445,11 +467,11 @@ export namespace TeamMessaging {
         providerID: ProviderID.make(userInfo.model.providerID),
         modelID: ModelID.make(userInfo.model.modelID),
       },
-      time: { created: Date.now() },
+      time: { created: message.timestamp },
     })
 
     await Session.updatePart({
-      id: sessionPartId(message.id),
+      id: message.sessionPartID ? PartID.make(message.sessionPartID) : sessionPartId(message.id),
       messageID: msgId,
       sessionID: sid,
       type: "text",
