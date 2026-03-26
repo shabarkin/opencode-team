@@ -1747,6 +1747,58 @@ ToolRegistry.register({
 })
 
 ToolRegistry.register({
+  name: "team_request_spawn",
+  render(props) {
+    const data = useData()
+    const i18n = useI18n()
+    const location = useLocation()
+    const info = createMemo(() => teamLabel("team_request_spawn", props.input, props.metadata, i18n.t))
+    const child = () => teamSession(props.metadata)
+    const subtitle = createMemo(() => info()?.subtitle || child())
+    const running = createMemo(() => props.status === "pending" || props.status === "running")
+    const href = createMemo(() => {
+      if (running()) return
+      return sessionLink(child(), location.pathname, data.sessionHref)
+    })
+
+    if (!info()) {
+      return <GenericTool tool={props.tool} status={props.status} hideDetails={props.hideDetails} input={props.input} />
+    }
+
+    const titleContent = () => <TextShimmer text={info()!.title} active={running()} />
+
+    const trigger = () => (
+      <div data-slot="basic-tool-tool-info-structured">
+        <div data-slot="basic-tool-tool-info-main">
+          <span data-slot="basic-tool-tool-title" class="agent-title">
+            {titleContent()}
+          </span>
+          <Show when={subtitle()}>
+            <Switch>
+              <Match when={href()}>
+                <a
+                  data-slot="basic-tool-tool-subtitle"
+                  class="clickable subagent-link"
+                  href={href()!}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {subtitle()}
+                </a>
+              </Match>
+              <Match when={true}>
+                <span data-slot="basic-tool-tool-subtitle">{subtitle()}</span>
+              </Match>
+            </Switch>
+          </Show>
+        </div>
+      </div>
+    )
+
+    return <BasicTool icon="task" status={props.status} trigger={trigger()} hideDetails />
+  },
+})
+
+ToolRegistry.register({
   name: "team_delegate",
   render(props) {
     const data = useData()

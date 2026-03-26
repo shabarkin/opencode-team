@@ -1,4 +1,6 @@
-type ToolText = (key: string) => string
+type Vars = Record<string, string | number | boolean>
+
+type TextFn = (key: string, params?: Vars) => string
 
 export type TeamLabel = {
   icon: "task" | "fork"
@@ -11,19 +13,27 @@ function text(value: unknown) {
   return value
 }
 
+function flag(value: unknown) {
+  return value === true
+}
+
+function spawn(input: Record<string, unknown>, metadata: Record<string, unknown>, t: TextFn) {
+  const name = text(input.name) ?? text(metadata.memberName) ?? text(input.agent)
+  return {
+    icon: "task" as const,
+    title: name ? `${t("ui.tool.team.spawn")}: ${name}` : t("ui.tool.team.spawn"),
+    subtitle: text(input.prompt),
+  }
+}
+
 export function teamLabel(
   tool: string,
   input: Record<string, unknown> = {},
   metadata: Record<string, unknown> = {},
-  t: ToolText,
+  t: TextFn,
 ): TeamLabel | undefined {
   if (tool === "team_spawn") {
-    const name = text(input.name) ?? text(metadata.memberName)
-    return {
-      icon: "task",
-      title: name ? `${t("ui.tool.team.spawn")}: ${name}` : t("ui.tool.team.spawn"),
-      subtitle: text(input.prompt),
-    }
+    return spawn(input, metadata, t)
   }
 
   if (tool === "team_delegate") {
@@ -38,8 +48,12 @@ export function teamLabel(
     const name = text(input.name) ?? text(metadata.teamName)
     return {
       icon: "fork",
-      title: name ? `Created team: ${name}` : t("ui.tool.team.create"),
+      title: name ? t("ui.tool.team.create.created", { name }) : t("ui.tool.team.create"),
     }
+  }
+
+  if (tool === "team_request_spawn" && flag(metadata.approved) && teamSession(metadata)) {
+    return spawn(input, metadata, t)
   }
 }
 

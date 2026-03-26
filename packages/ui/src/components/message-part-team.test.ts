@@ -4,11 +4,14 @@ import { teamLabel, teamSession } from "./message-part-team"
 const dict = {
   "ui.tool.team.spawn": "Teammate",
   "ui.tool.team.create": "Create Team",
+  "ui.tool.team.create.created": "Created team: {{name}}",
   "ui.tool.team.delegate": "Delegate",
 }
 
-function t(key: string) {
-  return dict[key as keyof typeof dict] ?? key
+function t(key: string, params?: Record<string, string | number | boolean>) {
+  const value = dict[key as keyof typeof dict] ?? key
+  if (!params) return value
+  return value.replace(/{{\s*([^}]+?)\s*}}/g, (_, raw) => String(params[String(raw)] ?? ""))
 }
 
 describe("message-part-team", () => {
@@ -38,6 +41,25 @@ describe("message-part-team", () => {
       icon: "fork",
       title: "Created team: alpha",
     })
+  })
+
+  test("builds approved request labels from spawn metadata", () => {
+    expect(
+      teamLabel(
+        "team_request_spawn",
+        { name: "scout", prompt: "Review the schema", agent: "explore" },
+        { approved: true, sessionId: "ses_child" },
+        t,
+      ),
+    ).toEqual({
+      icon: "task",
+      title: "Teammate: scout",
+      subtitle: "Review the schema",
+    })
+
+    expect(teamLabel("team_request_spawn", { agent: "explore" }, { approved: false, sessionId: "ses_child" }, t)).toBe(
+      undefined,
+    )
   })
 
   test("reads only lowercase sessionId metadata", () => {
