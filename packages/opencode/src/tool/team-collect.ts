@@ -85,7 +85,7 @@ function text(state: ReturnType<typeof scan>, timedOut: boolean) {
 export const TeamCollectTool = Tool.define("team_collect", {
   description:
     "Wait for teammate results and return a consolidated collection summary. " +
-    "Use this after spawning teammates and before you synthesize the final answer.",
+    "This is the lead's synthesis gate: use it after spawning teammates and before you synthesize the final answer, instead of replacing teammate work with fresh hands-on investigation by the lead.",
   parameters: z.object({
     members: z
       .array(MemberNameSchema)

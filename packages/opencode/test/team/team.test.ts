@@ -1056,8 +1056,12 @@ describe("Team tool definitions", () => {
         )
 
         expect(result.output).toContain("CRITICAL WORKFLOW")
+        expect(result.output).toContain("LEAD ROLE")
+        expect(result.output).toContain("Own the goal, task breakdown, delegation, pacing, and final synthesis")
+        expect(result.output).toContain("Do NOT become the main executor")
         expect(result.output).toContain("team_collect")
         expect(result.output).toContain("DELIVERY DISCIPLINE")
+        expect(result.output).toContain("Prefer delegation, steering, and result collection")
         expect(result.output).toContain("OUTPUT FORMAT: Produce one concise narrative synthesis")
 
         expect(await Team.get("workflow-team")).toMatchObject({
@@ -1300,6 +1304,7 @@ describe("Team tool definitions", () => {
 
         const tool = await TeamSpawnTool.init()
         expect(tool.description).toContain("Security Researcher Hunter")
+        expect(tool.description).toContain("stay focused on orchestration")
 
         const result = await tool.execute(
           {
@@ -1329,6 +1334,8 @@ describe("Team tool definitions", () => {
         )
 
         expect(result.title).toBe("Spawned teammate: worker")
+        expect(result.output).toContain("Stay in LEAD MODE")
+        expect(result.output).toContain("avoid taking this task back yourself")
         expect(result.output).toContain("team_collect")
         expect(spawn).toHaveBeenCalledWith(
           expect.objectContaining({

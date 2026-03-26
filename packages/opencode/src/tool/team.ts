@@ -33,8 +33,10 @@ export const TeamCreateTool = Tool.define("team_create", {
   description:
     "Create a new agent team for coordinating parallel work across multiple sessions. " +
     "Use this when the user explicitly asks for a team of agents, teammates, or delegate mode. " +
-    "You become the team lead. After creating a team, use team_spawn to add teammates, " +
-    "and team_tasks to create a shared task list.",
+    "You become the team lead, which means your primary job is orchestration: break the goal into tasks, " +
+    "spawn specialists, steer them with team_message or team_broadcast, monitor progress with team_status or team_inbox, " +
+    "and synthesize only after team_collect. The lead may read or search strategically for planning and verification, " +
+    "but should not become the main hands-on investigator or implementer.",
   parameters: z.object({
     name: TeamNameSchema.describe("Team name — lowercase, hyphens allowed. E.g. 'auth-review', 'feature-impl'"),
     tasks: z
@@ -121,6 +123,12 @@ export const TeamCreateTool = Tool.define("team_create", {
         params.delegate ? "DELEGATE MODE: You are restricted to coordination tools only (no write/edit/bash)." : "",
         params.max_cost ? `Team budget cap: $${params.max_cost.toFixed(2)}.` : "",
         "",
+        "LEAD ROLE:",
+        "- Own the goal, task breakdown, delegation, pacing, and final synthesis",
+        "- Keep teammates doing the hands-on investigation and implementation work",
+        "- Use read/search only for strategic planning, validation, and integration decisions",
+        "- Do NOT become the main executor while teammates are available to do the work",
+        "",
         "Quick reference:",
         "  team_spawn        — Add a teammate (set agent, model, prompt, timeout)",
         "  team_status       — Full team snapshot (members, tasks, costs)",
@@ -144,14 +152,17 @@ export const TeamCreateTool = Tool.define("team_create", {
         "  team_cleanup      — Remove team resources (after all shutdown)",
         "",
         "CRITICAL WORKFLOW:",
-        "1. Spawn all teammates needed for the task",
-        "2. Use team_collect to WAIT for all teammates to submit results",
-        "3. Only AFTER team_collect returns, synthesize the final output",
-        "4. Do NOT produce final output while any teammate is still working",
-        "5. Deliver ONE consolidated synthesis, then shut down the team",
+        "1. Break the goal into workstreams and capture them in team_tasks",
+        "2. Spawn teammates to own those workstreams and keep yourself in an orchestration role",
+        "3. Use team_status, team_inbox, team_message, and team_broadcast to steer the team",
+        "4. Use team_collect to WAIT for teammate results instead of doing their work yourself",
+        "5. Only AFTER team_collect returns, synthesize the final output",
+        "6. Do NOT produce final output while any teammate is still working",
+        "7. Deliver ONE consolidated synthesis, then shut down the team",
         "",
         "DELIVERY DISCIPLINE:",
         "- Produce ONE consolidated synthesis after team_collect returns",
+        "- Prefer delegation, steering, and result collection over direct execution by the lead",
         "- Do NOT re-send summaries or repeatedly offer next steps",
         "- After delivery: team_shutdown_all → team_cleanup → done",
         params.output_format === "single_synthesis"
@@ -183,6 +194,7 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
       "with its own context window. Specify the agent type, a name, and a prompt describing " +
       "what this teammate should work on. You can optionally assign a different model to each " +
       "teammate (e.g. use Gemini for research and Claude for implementation). " +
+      "As the lead, stay focused on orchestration after spawning: assign work, steer, unblock, monitor, and collect results rather than taking the task back yourself. " +
       "Use the exact configured agent name. " +
       `Available agent types: ${names.join(", ")}. ` +
       "SUBAGENT RELAY: If subagents are used, they CANNOT communicate with the team directly; " +
@@ -395,8 +407,10 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
           params.result_deadline ? `Result deadline: ${params.result_deadline} minute(s).` : "",
           params.max_cost ? `Cost limit: $${params.max_cost.toFixed(2)}.` : "",
           "",
-          "The teammate is now working in the background. After spawning all teammates,",
-          "use team_collect to wait for their results before synthesizing.",
+          "The teammate is now working in the background.",
+          "Stay in LEAD MODE: keep orchestrating, avoid taking this task back yourself,",
+          "and use team_tasks, team_status, team_inbox, and team_message to steer execution.",
+          "After spawning the team, use team_collect to wait for their results before synthesizing.",
           "Messages from the teammate will be delivered automatically when they finish or need help.",
         ]
           .filter(Boolean)
@@ -651,8 +665,9 @@ export const TeamBroadcastTool = Tool.define("team_broadcast", {
 export const TeamTasksTool = Tool.define("team_tasks", {
   description:
     "View or update the shared task list for the team. " +
-    "Use action 'list' to see all tasks, 'add' to add new tasks, " +
-    "'complete' to mark a task done, or 'update' to replace the full list.",
+    "Leads should use this to decompose the goal, track ownership, and steer the work. " +
+    "Teammates should use it to understand, claim, and complete assigned execution tasks. " +
+    "Use action 'list' to see all tasks, 'add' to add new tasks, 'complete' to mark a task done, or 'update' to replace the full list.",
   parameters: z.object({
     action: z.enum(["list", "add", "complete", "update"]).describe("What to do with the task list"),
     tasks: z
@@ -737,7 +752,7 @@ export const TeamClaimTool = Tool.define("team_claim", {
   description:
     "Claim a pending task from the team's shared task list. " +
     "Only pending, unassigned tasks with resolved dependencies can be claimed. " +
-    "Uses file locking to prevent race conditions.",
+    "Uses file locking to prevent race conditions. Teammates should usually claim execution tasks; the lead should usually avoid claiming hands-on work unless intentionally taking a coordination or synthesis task.",
   parameters: z.object({
     task_id: z.string().describe("The ID of the task to claim"),
   }),
@@ -753,7 +768,7 @@ export const TeamClaimTool = Tool.define("team_claim", {
     if (claimed) {
       return {
         title: `Claimed task ${params.task_id}`,
-        output: `You claimed task "${params.task_id}". It's now in_progress assigned to you.`,
+        output: `You claimed task "${params.task_id}". It's now in_progress assigned to you.${teamInfo.role === "lead" ? " Leads should usually claim only coordination, integration, or synthesis work." : ""}`,
         metadata: { taskId: params.task_id },
       }
     } else {

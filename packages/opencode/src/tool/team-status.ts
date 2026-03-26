@@ -7,7 +7,7 @@ export const TeamStatusTool = Tool.define("team_status", {
   description:
     "Get a comprehensive snapshot of the current team state including all members, " +
     "their status, the task board, unread message counts, and cost estimates. " +
-    "Use this to understand what the team is doing before making coordination decisions.",
+    "Use this as the lead's primary monitoring tool before making coordination decisions, reassigning work, or collecting results.",
   parameters: z.object({}),
   async execute(_params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
     const info = await Team.findBySession(ctx.sessionID)

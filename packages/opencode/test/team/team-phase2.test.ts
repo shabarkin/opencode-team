@@ -299,6 +299,8 @@ describe("team phase 2", () => {
         )
 
         expect(result.title).toBe("Spawned teammate: worker")
+        expect(result.output).toContain("Stay in LEAD MODE")
+        expect(result.output).toContain("team_status")
         expect(result.metadata).toMatchObject({
           memberName: "worker",
           sessionId: "ses_spawned",

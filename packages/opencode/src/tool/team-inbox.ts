@@ -58,7 +58,9 @@ function filter(
 }
 
 export const TeamInboxTool = Tool.define("team_inbox", {
-  description: "Read a team inbox, inspect unread messages, or flush undelivered inbox messages.",
+  description:
+    "Read a team inbox, inspect unread messages, or flush undelivered inbox messages. " +
+    "For leads, this is the main way to gather teammate findings, blockers, and final results without taking over their work directly.",
   parameters: z.object({
     action: z.enum(["list", "read", "flush"]),
     member: MemberNameSchema.optional().describe("Optional teammate inbox to inspect. Lead only."),
