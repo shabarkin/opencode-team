@@ -78,6 +78,7 @@ import { Filesystem } from "@/util/filesystem"
 import { Global } from "@/global"
 import { PermissionPrompt } from "./permission"
 import { QuestionPrompt } from "./question"
+import { childSession, teamTool } from "@/cli/cmd/tool-link"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import { formatTranscript } from "../../util/transcript"
 import { UI } from "@/cli/ui.ts"
@@ -1594,7 +1595,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           )
         }}
       </For>
-      <Show when={props.parts.some((x) => x.type === "tool" && x.tool === "task")}>
+      <Show when={props.parts.some((x) => x.type === "tool" && !!childSession(x))}>
         <box paddingTop={1} paddingLeft={3}>
           <text fg={theme.text}>
             {keybind.print("session_child_first")}
@@ -1790,6 +1791,16 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         </Match>
         <Match when={props.part.tool === "task"}>
           <Task {...toolprops} />
+        </Match>
+        <Match
+          when={
+            props.part.tool === "team_spawn" ||
+            props.part.tool === "team_request_spawn" ||
+            props.part.tool === "team_delegate" ||
+            props.part.tool === "team_create"
+          }
+        >
+          <TeamTool {...toolprops} />
         </Match>
         <Match when={props.part.tool === "apply_patch"}>
           <ApplyPatch {...toolprops} />
@@ -2265,6 +2276,39 @@ function Task(props: ToolProps<typeof TaskTool>) {
         if (props.metadata.sessionId) {
           navigate({ type: "session", sessionID: props.metadata.sessionId })
         }
+      }}
+    >
+      {content()}
+    </InlineTool>
+  )
+}
+
+function TeamTool(props: ToolProps<any>) {
+  const { navigate } = useRoute()
+  const sync = useSync()
+  const info = createMemo(() => teamTool(props.part))
+  const id = createMemo(() => childSession(props.part))
+  const done = createMemo(() => props.part.state.status === "completed")
+
+  onMount(() => {
+    if (id() && !sync.data.message[id()!]?.length) sync.session.sync(id()!)
+  })
+
+  const content = createMemo(() => {
+    const item = info()
+    if (!item) return props.tool
+    return [item.title, item.subtitle, done() && id() ? `└ session ${id()}` : ""].filter(Boolean).join("\n")
+  })
+
+  return (
+    <InlineTool
+      icon={info()?.icon ?? "⚙"}
+      spinner={props.part.state.status === "running"}
+      complete={info()?.title}
+      pending={info()?.pending ?? "Running tool..."}
+      part={props.part}
+      onClick={() => {
+        if (id()) navigate({ type: "session", sessionID: id()! })
       }}
     >
       {content()}

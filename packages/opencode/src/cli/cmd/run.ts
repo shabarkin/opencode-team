@@ -27,6 +27,7 @@ import { SkillTool } from "../../tool/skill"
 import { BashTool } from "../../tool/bash"
 import { TodoWriteTool } from "../../tool/todo"
 import { Locale } from "../../util/locale"
+import { childSession, teamTool } from "./tool-link"
 
 type ToolProps<T extends Tool.Info> = {
   input: Tool.InferParameters<T>
@@ -181,6 +182,20 @@ function task(info: ToolProps<typeof TaskTool>) {
     icon,
     title: name,
     description: desc ? `${agent} Agent` : undefined,
+  })
+}
+
+function team(info: ToolProps<any>) {
+  const item = teamTool(info.part)
+  if (!item) {
+    fallback(info.part)
+    return
+  }
+  const bits = [item.subtitle, childSession(info.part) ? `session ${childSession(info.part)}` : ""].filter(Boolean)
+  inline({
+    icon: item.icon,
+    title: item.title,
+    description: bits.join(" · ") || undefined,
   })
 }
 
@@ -422,6 +437,10 @@ export const RunCommand = cmd({
           if (part.tool === "codesearch") return codesearch(props<typeof CodeSearchTool>(part))
           if (part.tool === "websearch") return websearch(props<typeof WebSearchTool>(part))
           if (part.tool === "task") return task(props<typeof TaskTool>(part))
+          if (part.tool === "team_spawn") return team(props(part))
+          if (part.tool === "team_request_spawn") return team(props(part))
+          if (part.tool === "team_delegate") return team(props(part))
+          if (part.tool === "team_create") return team(props(part))
           if (part.tool === "todowrite") return todo(props<typeof TodoWriteTool>(part))
           if (part.tool === "skill") return skill(props<typeof SkillTool>(part))
           return fallback(part)
@@ -476,12 +495,13 @@ export const RunCommand = cmd({
 
             if (
               part.type === "tool" &&
-              part.tool === "task" &&
+              ["task", "team_spawn", "team_request_spawn", "team_delegate", "team_create"].includes(part.tool) &&
               part.state.status === "running" &&
               args.format !== "json"
             ) {
               if (toggles.get(part.id) === true) continue
-              task(props<typeof TaskTool>(part))
+              if (part.tool === "task") task(props<typeof TaskTool>(part))
+              else team(props(part))
               toggles.set(part.id, true)
             }
 
