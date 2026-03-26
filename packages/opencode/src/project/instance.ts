@@ -94,15 +94,18 @@ export const Instance = {
   },
   /**
    * Check if a path is within the project boundary.
-   * Returns true if path is inside Instance.directory OR Instance.worktree.
-   * Paths within the worktree but outside the working directory should not trigger external_directory permission.
+   * Returns true if path is inside Instance.directory, Instance.worktree, or a registered sandbox.
+   * Paths within the repo, sibling worktrees, or managed sandboxes should not trigger external_directory permission.
    */
   containsPath(filepath: string) {
     if (Filesystem.contains(Instance.directory, filepath)) return true
     // Non-git projects set worktree to "/" which would match ANY absolute path.
     // Skip worktree check in this case to preserve external_directory permissions.
-    if (Instance.worktree === "/") return false
-    return Filesystem.contains(Instance.worktree, filepath)
+    if (Instance.worktree !== "/" && Filesystem.contains(Instance.worktree, filepath)) return true
+    const sandboxes = (Project.get(Instance.project.id)?.sandboxes ?? Instance.project.sandboxes).filter((dir) =>
+      Filesystem.stat(dir)?.isDirectory(),
+    )
+    return sandboxes.some((dir) => Filesystem.contains(dir, filepath))
   },
   /**
    * Captures the current instance ALS context and returns a wrapper that

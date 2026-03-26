@@ -3,6 +3,7 @@ import os from "os"
 import path from "path"
 import { BashTool } from "../../src/tool/bash"
 import { Instance } from "../../src/project/instance"
+import { Project } from "../../src/project/project"
 import { Filesystem } from "../../src/util/filesystem"
 import { tmpdir } from "../fixture/fixture"
 import type { Permission } from "../../src/permission"
@@ -150,6 +151,44 @@ describe("tool.bash permissions", () => {
         expect(extDirReq!.patterns).toContain(path.join(os.tmpdir(), "*"))
       },
     })
+  })
+
+  test("does not ask for external_directory permission for registered worktrees", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const tree = `${tmp.path}-worktree`
+
+    try {
+      await Bun.$`git worktree add ${tree} -b test-worktree-${Date.now()}`.cwd(tmp.path).quiet()
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          await Project.addSandbox(Instance.project.id, tree)
+          const bash = await BashTool.init()
+          const requests: Array<Omit<Permission.Request, "id" | "sessionID" | "tool">> = []
+          const testCtx = {
+            ...ctx,
+            ask: async (req: Omit<Permission.Request, "id" | "sessionID" | "tool">) => {
+              requests.push(req)
+            },
+          }
+
+          await bash.execute(
+            {
+              command: "pwd",
+              workdir: tree,
+              description: "Print worktree directory",
+            },
+            testCtx,
+          )
+
+          const ext = requests.find((item) => item.permission === "external_directory")
+          expect(ext).toBeUndefined()
+        },
+      })
+    } finally {
+      await Bun.$`git worktree remove --force ${tree}`.cwd(tmp.path).quiet().nothrow()
+    }
   })
 
   test("asks for external_directory permission when file arg is outside project", async () => {

@@ -4,6 +4,7 @@ import fs from "fs/promises"
 import { Filesystem } from "../../src/util/filesystem"
 import { File } from "../../src/file"
 import { Instance } from "../../src/project/instance"
+import { Project } from "../../src/project/project"
 import { tmpdir } from "../fixture/fixture"
 
 describe("Filesystem.contains", () => {
@@ -194,5 +195,24 @@ describe("Instance.containsPath", () => {
         expect(Instance.containsPath("/tmp/other")).toBe(false)
       },
     })
+  })
+
+  test("returns true for paths inside registered worktree sandboxes", async () => {
+    await using tmp = await tmpdir({ git: true })
+    const tree = `${tmp.path}-worktree`
+
+    try {
+      await fs.mkdir(tree, { recursive: true })
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          await Project.addSandbox(Instance.project.id, tree)
+          expect(Instance.containsPath(path.join(tree, "file.txt"))).toBe(true)
+        },
+      })
+    } finally {
+      await fs.rm(tree, { recursive: true, force: true })
+    }
   })
 })
