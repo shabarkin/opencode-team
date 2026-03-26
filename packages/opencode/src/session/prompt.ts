@@ -278,6 +278,47 @@ export namespace SessionPrompt {
     return
   }
 
+  export async function steer(sessionID: SessionID, text: string) {
+    const msgs = await Session.messages({ sessionID })
+    const last = msgs.findLast((item) => item.info.role === "user")
+    if (!last) throw new Error("No user message found in session")
+    const user = last.info as MessageV2.User
+
+    const msg = MessageID.ascending()
+    await Session.updateMessage({
+      id: msg,
+      sessionID,
+      role: "user",
+      time: {
+        created: Date.now(),
+      },
+      agent: user.agent,
+      model: user.model,
+      ...(user.format ? { format: user.format } : {}),
+      ...(user.system ? { system: user.system } : {}),
+      ...(user.tools ? { tools: user.tools } : {}),
+      ...(user.variant ? { variant: user.variant } : {}),
+    } satisfies MessageV2.User)
+    await Session.updatePart({
+      id: PartID.ascending(),
+      messageID: msg,
+      sessionID,
+      type: "text",
+      text,
+      synthetic: true,
+    } satisfies MessageV2.TextPart)
+
+    const status = await SessionStatus.get(sessionID)
+    if (status.type !== "idle") return
+
+    SessionPrompt.loop({ sessionID }).catch((err) => {
+      log.warn("steer wake failed", {
+        sessionID,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
+  }
+
   export const LoopInput = z.object({
     sessionID: SessionID.zod,
     resume_existing: z.boolean().optional(),

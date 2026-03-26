@@ -1,15 +1,52 @@
 import path from "path"
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { fileURLToPath } from "url"
 import { Instance } from "../../src/project/instance"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Session } from "../../src/session"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionPrompt } from "../../src/session/prompt"
+import { MessageID, PartID, type SessionID } from "../../src/session/schema"
+import { SessionStatus } from "../../src/session/status"
 import { Log } from "../../src/util/log"
 import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
+
+async function seed(sessionID: SessionID) {
+  const msg = MessageID.ascending()
+  await Session.updateMessage({
+    id: msg,
+    sessionID,
+    role: "user",
+    time: { created: Date.now() },
+    agent: "build",
+    model: {
+      providerID: ProviderID.make("test"),
+      modelID: ModelID.make("test"),
+    },
+    system: "keep the existing system prompt",
+    tools: { read: true },
+    variant: "high",
+    format: {
+      type: "json_schema",
+      schema: {
+        type: "object",
+        properties: {
+          ok: { type: "boolean" },
+        },
+      },
+      retryCount: 1,
+    },
+  } satisfies MessageV2.User)
+  await Session.updatePart({
+    id: PartID.ascending(),
+    sessionID,
+    messageID: msg,
+    type: "text",
+    text: "original task",
+  } satisfies MessageV2.TextPart)
+}
 
 describe("session.prompt missing file", () => {
   test("does not fail the prompt when a file part is missing", async () => {
@@ -284,5 +321,83 @@ describe("session.prompt agent hints", () => {
       if (prev === undefined) delete process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
       else process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = prev
     }
+  })
+})
+
+describe("session.prompt steer", () => {
+  test("injects a synthetic user message and preserves prompt context", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({})
+        const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "busy" } satisfies SessionStatus.Info)
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
+
+        await seed(session.id)
+        await SessionPrompt.steer(session.id, "focus on tests instead")
+
+        const msgs = await Session.messages({ sessionID: session.id })
+        const last = msgs.at(-1)
+
+        expect(loop).not.toHaveBeenCalled()
+        expect(last?.info.role).toBe("user")
+        if (last?.info.role === "user") {
+          expect(last.info.agent).toBe("build")
+          expect(last.info.model).toEqual({
+            providerID: ProviderID.make("test"),
+            modelID: ModelID.make("test"),
+          })
+          expect(last.info.system).toBe("keep the existing system prompt")
+          expect(last.info.tools).toEqual({ read: true })
+          expect(last.info.variant).toBe("high")
+          expect(last.info.format).toEqual({
+            type: "json_schema",
+            schema: {
+              type: "object",
+              properties: {
+                ok: { type: "boolean" },
+              },
+            },
+            retryCount: 1,
+          })
+        }
+
+        const part = last?.parts.find((item) => item.type === "text")
+        expect(part?.type).toBe("text")
+        if (part?.type === "text") {
+          expect(part.synthetic).toBe(true)
+          expect(part.text).toBe("focus on tests instead")
+        }
+
+        loop.mockRestore()
+        status.mockRestore()
+        await Session.remove(session.id)
+      },
+    })
+  })
+
+  test("auto-wakes idle sessions after steer", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({})
+        const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "idle" } satisfies SessionStatus.Info)
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
+
+        await seed(session.id)
+        await SessionPrompt.steer(session.id, "pick up the new priority")
+
+        expect(loop).toHaveBeenCalledTimes(1)
+        expect(loop).toHaveBeenCalledWith({ sessionID: session.id })
+
+        loop.mockRestore()
+        status.mockRestore()
+        await Session.remove(session.id)
+      },
+    })
   })
 })

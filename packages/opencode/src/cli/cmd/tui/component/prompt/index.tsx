@@ -29,6 +29,7 @@ import { Locale } from "@/util/locale"
 import { formatDuration } from "@/util/format"
 import { createColors, createFrames } from "../../ui/spinner.ts"
 import { useDialog } from "@tui/ui/dialog"
+import { DialogPrompt } from "@tui/ui/dialog-prompt"
 import { DialogProvider as DialogProviderConnect } from "../dialog-provider"
 import { DialogAlert } from "../../ui/dialog-alert"
 import { useToast } from "../../ui/toast"
@@ -75,12 +76,11 @@ export function Prompt(props: PromptProps) {
   const dialog = useDialog()
   const toast = useToast()
   const status = createMemo(() => sync.data.session_status?.[props.sessionID ?? ""] ?? { type: "idle" })
+  const team = createMemo(() => sync.data.team?.[props.sessionID ?? ""])
   const teamBusy = createMemo(() => {
-    const sid = props.sessionID
-    if (!sid) return 0
-    const team = sync.data.team?.[sid]
-    if (!team || team.role !== "lead") return 0
-    return team.members.filter((m) => {
+    const info = team()
+    if (!info || info.role !== "lead") return 0
+    return info.members.filter((m) => {
       if (m.status === "shutdown") return false
       return ["starting", "running", "cancel_requested", "cancelling", "completing"].includes(m.execution_status)
     }).length
@@ -242,8 +242,8 @@ export function Prompt(props: PromptProps) {
           if (!props.sessionID) return
 
           if (status().type === "idle" && teamBusy() > 0) {
-            const team = sync.data.team?.[props.sessionID]
-            for (const member of team?.members ?? []) {
+            const info = team()
+            for (const member of info?.members ?? []) {
               if (
                 ["starting", "running", "cancel_requested", "cancelling", "completing"].includes(
                   member.execution_status,
@@ -269,6 +269,48 @@ export function Prompt(props: PromptProps) {
             setStore("interrupt", 0)
           }
           dialog.clear()
+        },
+      },
+      {
+        title: "Steer session",
+        value: "session.steer",
+        keybind: "session_steer",
+        category: "Session",
+        hidden: true,
+        enabled: status().type !== "idle" && !team(),
+        onSelect: async (dialog) => {
+          if (autocomplete.visible) return
+          if (!input.focused) return
+          if (!props.sessionID) return
+
+          const result = await DialogPrompt.show(dialog, "Steer session", {
+            placeholder: "Tell the agent how to adjust course",
+          })
+          if (result === null) return
+
+          const text = result.trim()
+          if (!text) return
+
+          try {
+            const res = await sdk.fetch(`${sdk.url}/session/${props.sessionID}/steer`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ text }),
+            })
+            if (!res.ok) {
+              const body = await res.json().catch(() => undefined)
+              throw new Error(body?.error ?? "Failed to steer session")
+            }
+            dialog.clear()
+            toast.show({ message: "Sent updated instructions", variant: "success" })
+          } catch (err) {
+            toast.show({
+              message: err instanceof Error ? err.message : "Failed to steer session",
+              variant: "error",
+            })
+          }
         },
       },
       {
@@ -1190,12 +1232,19 @@ export function Prompt(props: PromptProps) {
                   })()}
                 </box>
               </box>
-              <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
-                esc{" "}
-                <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
-                  {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
-                </span>
-              </text>
+              <box flexDirection="row" gap={2} flexShrink={0}>
+                <text fg={store.interrupt > 0 ? theme.primary : theme.text}>
+                  esc{" "}
+                  <span style={{ fg: store.interrupt > 0 ? theme.primary : theme.textMuted }}>
+                    {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
+                  </span>
+                </text>
+                <Show when={!team()}>
+                  <text fg={theme.text}>
+                    {keybind.print("session_steer")} <span style={{ fg: theme.textMuted }}>steer</span>
+                  </text>
+                </Show>
+              </box>
             </box>
           </Show>
           <Show when={status().type !== "retry"}>

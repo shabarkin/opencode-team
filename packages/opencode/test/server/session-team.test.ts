@@ -1,8 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import { Instance } from "../../src/project/instance"
 import { SessionRoutes } from "../../src/server/routes/session"
 import { Session } from "../../src/session"
 import { MessageV2 } from "../../src/session/message-v2"
+import { SessionPrompt } from "../../src/session/prompt"
 import { MessageID, PartID, type SessionID } from "../../src/session/schema"
 import { Team } from "../../src/team"
 import { Inbox } from "../../src/team/inbox"
@@ -33,6 +34,33 @@ async function seed(sessionID: SessionID, text = "seed") {
 }
 
 describe("session team routes", () => {
+  test("steer forwards instructions to session prompt", async () => {
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({})
+        const steer = spyOn(SessionPrompt, "steer").mockResolvedValue()
+
+        const app = SessionRoutes()
+        const res = await app.request(`/${session.id}/steer`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ text: "focus on the failing tests" }),
+        })
+
+        expect(res.status).toBe(200)
+        expect(await res.json()).toBe(true)
+        expect(steer).toHaveBeenCalledWith(session.id, "focus on the failing tests")
+
+        steer.mockRestore()
+      },
+    })
+  })
+
   test("team-message sends to teammate inbox and session", async () => {
     await using tmp = await tmpdir()
 

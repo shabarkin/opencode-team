@@ -40,6 +40,18 @@ test("loads tui config with the same precedence order as server config paths", a
   })
 })
 
+test("fills in the default session steer keybind", async () => {
+  await using tmp = await tmpdir()
+
+  await Instance.provide({
+    directory: tmp.path,
+    fn: async () => {
+      const config = await TuiConfig.get()
+      expect(config.keybinds?.session_steer).toBe("ctrl+s")
+    },
+  })
+})
+
 test("migrates tui-specific keys from opencode.json when tui.json does not exist", async () => {
   await using tmp = await tmpdir({
     init: async (dir) => {

@@ -26,6 +26,9 @@ const TeamMessage = z.object({
   text: z.string(),
   agent: z.string().optional(),
 })
+const SessionSteer = z.object({
+  text: z.string(),
+})
 
 export const SessionRoutes = lazy(() =>
   new Hono()
@@ -395,6 +398,38 @@ export const SessionRoutes = lazy(() =>
           }
         } catch {}
 
+        return c.json(true)
+      },
+    )
+    .post(
+      "/:sessionID/steer",
+      describeRoute({
+        summary: "Steer session",
+        description: "Inject corrective instructions into a running session without cancelling its current work.",
+        operationId: "session.steer",
+        responses: {
+          200: {
+            description: "Steered session",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: SessionID.zod,
+        }),
+      ),
+      validator("json", SessionSteer),
+      async (c) => {
+        const sessionID = c.req.valid("param").sessionID
+        const body = c.req.valid("json")
+        await SessionPrompt.steer(sessionID, body.text)
         return c.json(true)
       },
     )
