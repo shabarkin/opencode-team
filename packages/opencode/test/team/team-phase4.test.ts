@@ -349,6 +349,7 @@ describe("team phase 4", () => {
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
         const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
         expect(out.output).toContain("Requested shutdown for 2 teammate")
+        expect(out.output).toContain("call team_cleanup to end team mode")
         expect(shut).toHaveBeenCalledTimes(2)
 
         shut.mockRestore()
@@ -367,6 +368,7 @@ describe("team phase 4", () => {
         const force = spyOn(Team, "forceShutdownAll").mockResolvedValue()
         const out = await (await TeamShutdownAllTool.init()).execute({ force: true }, ctx(lead.id))
         expect(out.output).toContain("Force shutdown")
+        expect(out.output).toContain("call team_cleanup to end team mode")
         expect(force).toHaveBeenCalledWith("phase4-shutdown-force", undefined)
 
         force.mockRestore()
@@ -390,6 +392,7 @@ describe("team phase 4", () => {
           await TeamCleanupTool.init()
         ).execute({ name: "phase4-cleanup-force", force: true }, ctx(lead.id))
         expect(out.title).toContain("Team cleaned up")
+        expect(out.output).toContain("Resume normal non-team chat behavior")
         expect(force).toHaveBeenCalled()
         expect(await Team.get("phase4-cleanup-force")).toBeUndefined()
 

@@ -33,7 +33,7 @@ export const TeamCreateTool = Tool.define("team_create", {
   description:
     "Create a new agent team for coordinating parallel work across multiple sessions. " +
     "Use this when the user explicitly asks for a team of agents, teammates, or delegate mode. " +
-    "You become the team lead, which means your primary job is orchestration: break the goal into tasks, " +
+    "While the team is active, you become the team lead, which means your primary job is orchestration: break the goal into tasks, " +
     "spawn specialists, steer them with team_message or team_broadcast, monitor progress with team_status or team_inbox, " +
     "and synthesize only after team_collect. The lead may read or search strategically for planning and verification, " +
     "but should not become the main hands-on investigator or implementer.",
@@ -123,7 +123,7 @@ export const TeamCreateTool = Tool.define("team_create", {
         params.delegate ? "DELEGATE MODE: You are restricted to coordination tools only (no write/edit/bash)." : "",
         params.max_cost ? `Team budget cap: $${params.max_cost.toFixed(2)}.` : "",
         "",
-        "LEAD ROLE:",
+        "LEAD ROLE (while this team is active):",
         "- Own the goal, task breakdown, delegation, pacing, and final synthesis",
         "- Keep teammates doing the hands-on investigation and implementation work",
         "- Use read/search only for strategic planning, validation, and integration decisions",
@@ -408,7 +408,7 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
           params.max_cost ? `Cost limit: $${params.max_cost.toFixed(2)}.` : "",
           "",
           "The teammate is now working in the background.",
-          "Stay in LEAD MODE: keep orchestrating, avoid taking this task back yourself,",
+          "Stay in LEAD MODE while this team is active: keep orchestrating, avoid taking this task back yourself,",
           "and use team_tasks, team_status, team_inbox, and team_message to steer execution.",
           "After spawning the team, use team_collect to wait for their results before synthesizing.",
           "Messages from the teammate will be delivered automatically when they finish or need help.",
@@ -984,6 +984,7 @@ export const TeamCleanupTool = Tool.define("team_cleanup", {
         title: `Team cleaned up: ${params.name}`,
         output: [
           `Team "${params.name}" has been cleaned up. All resources removed.`,
+          "Resume normal non-team chat behavior unless the user asks you to run a team of agents again.",
           wasDelegate ? "Delegate mode restrictions have been removed. You can now use all tools again." : "",
         ]
           .filter(Boolean)

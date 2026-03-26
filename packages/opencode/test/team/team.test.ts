@@ -1056,7 +1056,7 @@ describe("Team tool definitions", () => {
         )
 
         expect(result.output).toContain("CRITICAL WORKFLOW")
-        expect(result.output).toContain("LEAD ROLE")
+        expect(result.output).toContain("LEAD ROLE (while this team is active)")
         expect(result.output).toContain("Own the goal, task breakdown, delegation, pacing, and final synthesis")
         expect(result.output).toContain("Do NOT become the main executor")
         expect(result.output).toContain("team_collect")
@@ -1334,7 +1334,7 @@ describe("Team tool definitions", () => {
         )
 
         expect(result.title).toBe("Spawned teammate: worker")
-        expect(result.output).toContain("Stay in LEAD MODE")
+        expect(result.output).toContain("Stay in LEAD MODE while this team is active")
         expect(result.output).toContain("avoid taking this task back yourself")
         expect(result.output).toContain("team_collect")
         expect(spawn).toHaveBeenCalledWith(

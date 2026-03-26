@@ -21,7 +21,10 @@ export const TeamShutdownAllTool = Tool.define("team_shutdown_all", {
       await Team.setTeamPhase(info.team.name, "delivery")
       return {
         title: "Shutdown requested for all teammates",
-        output: `Force shutdown applied to ${live.length} teammate(s).`,
+        output: [
+          `Force shutdown applied to ${live.length} teammate(s).`,
+          "After final delivery, call team_cleanup to end team mode and resume normal non-team chat unless the user asks for a team again.",
+        ].join("\n"),
         metadata: { count: live.length, force: true },
       }
     }
@@ -50,6 +53,7 @@ export const TeamShutdownAllTool = Tool.define("team_shutdown_all", {
       output: [
         `Requested shutdown for ${count} teammate(s).`,
         blocked.length > 0 ? `Blocked: ${blocked.join("; ")}` : "",
+        "After final delivery, call team_cleanup to end team mode and resume normal non-team chat unless the user asks for a team again.",
       ]
         .filter(Boolean)
         .join("\n"),
