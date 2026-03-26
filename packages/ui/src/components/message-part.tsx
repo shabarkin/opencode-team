@@ -55,6 +55,7 @@ import { ToolStatusTitle } from "./tool-status-title"
 import { animate } from "motion"
 import { useLocation } from "@solidjs/router"
 import { attached, inline, kind } from "./message-file"
+import { teamLabel, teamSession } from "./message-part-team"
 
 function ShellSubmessage(props: { text: string; animate?: boolean }) {
   let widthRef: HTMLSpanElement | undefined
@@ -223,8 +224,10 @@ function agentTitle(i18n: UiI18n, type?: string) {
   return i18n.t("ui.tool.agent", { type })
 }
 
-export function getToolInfo(tool: string, input: any = {}): ToolInfo {
+export function getToolInfo(tool: string, input: any = {}, metadata: any = {}): ToolInfo {
   const i18n = useI18n()
+  const team = teamLabel(tool, input, metadata, i18n.t)
+  if (team) return team
   switch (tool) {
     case "read":
       return {
@@ -588,7 +591,11 @@ function isContextGroupTool(part: PartType): part is ToolPart {
 }
 
 function contextToolDetail(part: ToolPart): string | undefined {
-  const info = getToolInfo(part.tool, part.state.input ?? {})
+  const info = getToolInfo(
+    part.tool,
+    part.state.input ?? {},
+    (part.state as { metadata?: Record<string, unknown> }).metadata ?? {},
+  )
   if (info.subtitle) return info.subtitle
   if (part.state.status === "error") return part.state.error
   if ((part.state.status === "running" || part.state.status === "completed") && part.state.title)
@@ -640,7 +647,7 @@ function contextToolTrigger(part: ToolPart, i18n: ReturnType<typeof useI18n>) {
       }
     }
     default: {
-      const info = getToolInfo(part.tool, input)
+      const info = getToolInfo(part.tool, input, (part.state as { metadata?: Record<string, unknown> }).metadata ?? {})
       return {
         title: info.title,
         subtitle: info.subtitle || contextToolDetail(part),
@@ -1688,6 +1695,125 @@ ToolRegistry.register({
     )
 
     return <BasicTool icon="task" status={props.status} trigger={trigger()} hideDetails />
+  },
+})
+
+ToolRegistry.register({
+  name: "team_spawn",
+  render(props) {
+    const data = useData()
+    const i18n = useI18n()
+    const location = useLocation()
+    const info = createMemo(() => teamLabel("team_spawn", props.input, props.metadata, i18n.t))
+    const child = () => teamSession(props.metadata)
+    const subtitle = createMemo(() => info()?.subtitle || child())
+    const running = createMemo(() => props.status === "pending" || props.status === "running")
+    const href = createMemo(() => {
+      if (running()) return
+      return sessionLink(child(), location.pathname, data.sessionHref)
+    })
+
+    const titleContent = () => <TextShimmer text={info()?.title ?? i18n.t("ui.tool.team.spawn")} active={running()} />
+
+    const trigger = () => (
+      <div data-slot="basic-tool-tool-info-structured">
+        <div data-slot="basic-tool-tool-info-main">
+          <span data-slot="basic-tool-tool-title" class="agent-title">
+            {titleContent()}
+          </span>
+          <Show when={subtitle()}>
+            <Switch>
+              <Match when={href()}>
+                <a
+                  data-slot="basic-tool-tool-subtitle"
+                  class="clickable subagent-link"
+                  href={href()!}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {subtitle()}
+                </a>
+              </Match>
+              <Match when={true}>
+                <span data-slot="basic-tool-tool-subtitle">{subtitle()}</span>
+              </Match>
+            </Switch>
+          </Show>
+        </div>
+      </div>
+    )
+
+    return <BasicTool icon="task" status={props.status} trigger={trigger()} hideDetails />
+  },
+})
+
+ToolRegistry.register({
+  name: "team_delegate",
+  render(props) {
+    const data = useData()
+    const i18n = useI18n()
+    const location = useLocation()
+    const info = createMemo(() => teamLabel("team_delegate", props.input, props.metadata, i18n.t))
+    const child = () => teamSession(props.metadata)
+    const subtitle = createMemo(() => info()?.subtitle || child())
+    const running = createMemo(() => props.status === "pending" || props.status === "running")
+    const href = createMemo(() => {
+      if (running()) return
+      return sessionLink(child(), location.pathname, data.sessionHref)
+    })
+
+    const titleContent = () => (
+      <TextShimmer text={info()?.title ?? i18n.t("ui.tool.team.delegate")} active={running()} />
+    )
+
+    const trigger = () => (
+      <div data-slot="basic-tool-tool-info-structured">
+        <div data-slot="basic-tool-tool-info-main">
+          <span data-slot="basic-tool-tool-title" class="agent-title">
+            {titleContent()}
+          </span>
+          <Show when={subtitle()}>
+            <Switch>
+              <Match when={href()}>
+                <a
+                  data-slot="basic-tool-tool-subtitle"
+                  class="clickable subagent-link"
+                  href={href()!}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {subtitle()}
+                </a>
+              </Match>
+              <Match when={true}>
+                <span data-slot="basic-tool-tool-subtitle">{subtitle()}</span>
+              </Match>
+            </Switch>
+          </Show>
+        </div>
+      </div>
+    )
+
+    return <BasicTool icon="task" status={props.status} trigger={trigger()} hideDetails />
+  },
+})
+
+ToolRegistry.register({
+  name: "team_create",
+  render(props) {
+    const i18n = useI18n()
+    const info = createMemo(() => teamLabel("team_create", props.input, props.metadata, i18n.t))
+    const running = createMemo(() => props.status === "pending" || props.status === "running")
+
+    const trigger = () => (
+      <div data-slot="basic-tool-tool-info-structured">
+        <div data-slot="basic-tool-tool-info-main">
+          <span data-slot="basic-tool-tool-title" class="agent-title">
+            <TextShimmer text={info()?.title ?? i18n.t("ui.tool.team.create")} active={running()} />
+          </span>
+        </div>
+      </div>
+    )
+
+    return <BasicTool icon="fork" status={props.status} trigger={trigger()} />
   },
 })
 

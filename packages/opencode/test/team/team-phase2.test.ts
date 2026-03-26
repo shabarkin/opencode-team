@@ -299,6 +299,11 @@ describe("team phase 2", () => {
         )
 
         expect(result.title).toBe("Spawned teammate: worker")
+        expect(result.metadata).toMatchObject({
+          memberName: "worker",
+          sessionId: "ses_spawned",
+        })
+        expect("sessionID" in result.metadata).toBe(false)
         expect(spawn).toHaveBeenCalledWith(
           expect.objectContaining({
             teamName: "phase2-spawn",

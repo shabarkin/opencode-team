@@ -225,6 +225,59 @@ describe("team phase 1", () => {
     })
   })
 
+  test("team_request_spawn returns lowercase sessionId metadata for auto-approved requests", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({})
+        const member = await Session.create({ parentID: lead.id })
+        await seed(lead.id)
+        await seed(member.id)
+
+        await Team.create({ name: "phase1-auto-request", leadSessionID: lead.id })
+        await Team.addMember("phase1-auto-request", {
+          name: "worker",
+          sessionID: member.id,
+          agent: "general",
+          status: "ready",
+          checkpoint: "none",
+          planApproval: "none",
+        })
+
+        const request = spyOn(Team, "requestSpawn").mockResolvedValue({
+          status: "approved",
+          label: "openai/gpt-4.1",
+          sessionID: "ses_auto",
+          request: { id: "req_auto", name: "scout" },
+        } as any)
+
+        const tool = await TeamRequestSpawnTool.init()
+        const result = await tool.execute(
+          {
+            agent: "explore",
+            name: "scout",
+            rationale: "Need extra research capacity",
+            prompt: "Research the open questions",
+          },
+          ctx(member.id, await Session.messages({ sessionID: member.id })),
+        )
+
+        expect(result.metadata).toMatchObject({
+          requestID: "req_auto",
+          sessionId: "ses_auto",
+          approved: true,
+        })
+        expect("sessionID" in result.metadata).toBe(false)
+
+        request.mockRestore()
+        await Team.setMemberStatus("phase1-auto-request", "worker", "shutdown")
+        await Team.cleanup("phase1-auto-request")
+      },
+    })
+  })
+
   test("team policy hooks can rewrite messages and block spawn and shutdown", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({

@@ -111,6 +111,9 @@ export const dict: Record<string, string> = {
   "ui.tool.agent": "{{type}} Agent",
   "ui.tool.agent.default": "Agent",
   "ui.tool.skill": "Skill",
+  "ui.tool.team.spawn": "Teammate",
+  "ui.tool.team.create": "Create Team",
+  "ui.tool.team.delegate": "Delegate",
 
   "ui.basicTool.called": "Called `{{tool}}`",
   "ui.toolErrorCard.failed": "Failed",

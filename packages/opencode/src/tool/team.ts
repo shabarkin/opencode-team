@@ -404,7 +404,7 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
         metadata: {
           teamName,
           memberName: name,
-          sessionID: spawned.sessionID,
+          sessionId: spawned.sessionID,
           model: spawned.label,
           planApproval: params.require_plan_approval,
           checkpoint: params.checkpoint ?? "none",
@@ -472,7 +472,7 @@ export const TeamRequestSpawnTool = Tool.define("team_request_spawn", async () =
         return {
           title: `Spawned teammate: ${result.request.name ?? params.name ?? params.agent}`,
           output: `Your spawn request was auto-approved. Teammate session ${result.sessionID} is now active using ${result.label}.`,
-          metadata: { requestID: result.request.id, sessionID: result.sessionID, approved: true },
+          metadata: { requestID: result.request.id, sessionId: result.sessionID, approved: true },
         }
       }
 
