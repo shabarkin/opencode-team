@@ -1060,8 +1060,10 @@ describe("Team tool definitions", () => {
         expect(result.output).toContain("Own the goal, task breakdown, delegation, pacing, and final synthesis")
         expect(result.output).toContain("Do NOT become the main executor")
         expect(result.output).toContain("team_collect")
+        expect(result.output).toContain("Facilitate peer-to-peer interaction")
+        expect(result.output).toContain("Only shut teammates down after reviews are complete")
         expect(result.output).toContain("DELIVERY DISCIPLINE")
-        expect(result.output).toContain("Prefer delegation, steering, and result collection")
+        expect(result.output).toContain("Prefer delegation, steering, consensus-building, and result collection")
         expect(result.output).toContain("OUTPUT FORMAT: Produce one concise narrative synthesis")
 
         expect(await Team.get("workflow-team")).toMatchObject({
@@ -1336,6 +1338,8 @@ describe("Team tool definitions", () => {
         expect(result.title).toBe("Spawned teammate: worker")
         expect(result.output).toContain("Stay in LEAD MODE while this team is active")
         expect(result.output).toContain("avoid taking this task back yourself")
+        expect(result.output).toContain("Facilitate teammate-to-teammate coordination")
+        expect(result.output).toContain("Do not rush shutdown while a teammate is still mid-review")
         expect(result.output).toContain("team_collect")
         expect(spawn).toHaveBeenCalledWith(
           expect.objectContaining({

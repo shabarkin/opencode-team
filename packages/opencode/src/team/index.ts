@@ -1391,6 +1391,7 @@ export namespace Team {
       "You MUST use team_submit_result to send a structured report to the lead when you finish. This is REQUIRED.",
       "Use team_message for follow-ups, questions, and coordination that are not final task results.",
       "You can message any teammate by name — not just the lead. Coordinate directly with peers when useful.",
+      "When reviews overlap, compare notes with peers, help unblock each other, and work toward a shared conclusion before final reporting.",
       "",
       "SUBAGENT RELAY: If you use the task tool to spawn subagents, they CANNOT communicate with the team.",
       "You are responsible for relaying any relevant subagent findings via team_message or team_broadcast.",

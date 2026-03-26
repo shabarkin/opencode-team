@@ -333,7 +333,7 @@ describe("team phase 4", () => {
     ).toThrow()
   })
 
-  test("team_shutdown_all sends shutdown request to all active members", async () => {
+  test("team_shutdown_all sends shutdown request after teammates finish their work", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
@@ -344,7 +344,9 @@ describe("team phase 4", () => {
         const b = await Session.create({ parentID: lead.id })
         await Team.create({ name: "phase4-shutdown-all", leadSessionID: lead.id })
         await Team.addMember("phase4-shutdown-all", { name: "a", sessionID: a.id, agent: "general", status: "ready" })
-        await Team.addMember("phase4-shutdown-all", { name: "b", sessionID: b.id, agent: "general", status: "busy" })
+        await Team.addMember("phase4-shutdown-all", { name: "b", sessionID: b.id, agent: "general", status: "ready" })
+        await Team.setMemberResultAt("phase4-shutdown-all", "a", Date.now())
+        await Team.setMemberResultAt("phase4-shutdown-all", "b", Date.now())
 
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
         const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
@@ -354,6 +356,148 @@ describe("team phase 4", () => {
 
         shut.mockRestore()
         await finish("phase4-shutdown-all")
+      },
+    })
+  })
+
+  test("team_shutdown_all defers while teammates are still mid-review", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("phase4-shutdown-defer", "busy")
+        await TeamTasks.add("phase4-shutdown-defer", [
+          { id: "review", content: "Finish the review", status: "in_progress", priority: "high", assignee: "worker" },
+        ])
+
+        const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
+        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        expect(out.title).toBe("Shutdown deferred")
+        expect(out.output).toContain("worker")
+        expect(out.output).toContain("not yet reported completion")
+        expect(out.output).toContain("team_message")
+        expect(shut).not.toHaveBeenCalled()
+
+        shut.mockRestore()
+        await finish("phase4-shutdown-defer")
+      },
+    })
+  })
+
+  test("team_shutdown_all allows shutdown when repeated noise makes the channel unhealthy", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("phase4-shutdown-noise", "busy")
+        await TeamTasks.add("phase4-shutdown-noise", [
+          { id: "review", content: "Finish the review", status: "in_progress", priority: "high", assignee: "worker" },
+        ])
+        for (const id of ["im_1", "im_2", "im_3", "im_4", "im_5", "im_6"]) {
+          await Inbox.write("phase4-shutdown-noise", "lead", {
+            id,
+            from: "system",
+            text: `Noise ${id}`,
+            timestamp: Date.now(),
+            type: "error",
+            priority: "urgent",
+          })
+        }
+
+        const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
+        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        expect(out.output).toContain("Repeated error/noise detected")
+        expect(shut).toHaveBeenCalledTimes(1)
+
+        shut.mockRestore()
+        await finish("phase4-shutdown-noise")
+      },
+    })
+  })
+
+  test("team_shutdown_all ignores stale read noise in the lead inbox", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("phase4-shutdown-stale", "busy")
+        await TeamTasks.add("phase4-shutdown-stale", [
+          { id: "review", content: "Finish the review", status: "in_progress", priority: "high", assignee: "worker" },
+        ])
+        for (const id of ["im_s1", "im_s2", "im_s3", "im_s4", "im_s5", "im_s6"]) {
+          await Inbox.write("phase4-shutdown-stale", "lead", {
+            id,
+            from: "system",
+            text: `BACKLOG alert ${id}`,
+            timestamp: Date.now() - 60_000,
+            type: "error",
+            priority: "urgent",
+          })
+        }
+        await Inbox.markRead("phase4-shutdown-stale", "lead")
+
+        const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
+        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        expect(out.title).toBe("Shutdown deferred")
+        expect(shut).not.toHaveBeenCalled()
+
+        shut.mockRestore()
+        await finish("phase4-shutdown-stale")
+      },
+    })
+  })
+
+  test("team_shutdown_all ignores deadline alerts when deciding if the channel is noisy", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("phase4-shutdown-deadline", "busy")
+        await TeamTasks.add("phase4-shutdown-deadline", [
+          { id: "review", content: "Finish the review", status: "in_progress", priority: "high", assignee: "worker" },
+        ])
+        for (const id of ["im_d1", "im_d2", "im_d3", "im_d4", "im_d5", "im_d6"]) {
+          await Inbox.write("phase4-shutdown-deadline", "lead", {
+            id,
+            from: "system",
+            text: `DEADLINE EXPIRED: worker alert ${id}`,
+            timestamp: Date.now(),
+            type: "error",
+            priority: "urgent",
+          })
+        }
+
+        const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
+        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        expect(out.title).toBe("Shutdown deferred")
+        expect(shut).not.toHaveBeenCalled()
+
+        shut.mockRestore()
+        await finish("phase4-shutdown-deadline")
+      },
+    })
+  })
+
+  test("team_shutdown_all defers for ready teammates without completion evidence", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("phase4-shutdown-ready", "ready")
+
+        const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
+        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        expect(out.title).toBe("Shutdown deferred")
+        expect(out.output).toContain("worker")
+        expect(shut).not.toHaveBeenCalled()
+
+        shut.mockRestore()
+        await finish("phase4-shutdown-ready")
       },
     })
   })
