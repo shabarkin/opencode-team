@@ -9,6 +9,9 @@ const ACTIVE_EXEC = new Set(["starting", "running", "cancel_requested", "cancell
 const ACTIVE_PHASE = new Set(["researching", "implementing", "testing", "waiting_approval"])
 const DONE_TASK = new Set(["completed", "cancelled"])
 
+/** Unified keyword pattern for detecting noise in both system and non-system messages. */
+const NOISE_KEYWORDS = /timeout|failed|failure|crash|conflict|noise|undelivered|backlog|blocked|error/i
+
 function active(
   member: NonNullable<Awaited<ReturnType<typeof Team.get>>>["members"][number],
   tasks: Awaited<ReturnType<typeof TeamTasks.list>>,
@@ -25,7 +28,9 @@ function done(
   items: Awaited<ReturnType<typeof Inbox.all>>,
 ) {
   if (member.status === "shutdown_requested") return true
-  const mark = member.assigned_at ?? 0
+  // Fallback to member.updated when assigned_at is unset (e.g., member added directly in non-"busy" state).
+  // In production, spawnMember() always sets assigned_at via the "busy" status path.
+  const mark = member.assigned_at ?? member.updated ?? 0
   if (typeof member.last_result_at === "number" && member.last_result_at >= mark) return true
   const own = tasks.filter((task) => task.assignee === member.name)
   if (own.length > 0 && own.every((task) => DONE_TASK.has(task.status))) return true
@@ -42,10 +47,10 @@ function noisy(items: Awaited<ReturnType<typeof Inbox.all>>, now: number) {
       if (item.type === "result" || item.type === "plan") return false
       if (/^DEADLINE (WARNING|EXPIRED):/.test(item.text)) return false
       if (item.from === "system") {
-        return /timeout|failed|failure|crash|conflict|noise|undelivered|backlog/i.test(item.text)
+        return NOISE_KEYWORDS.test(item.text)
       }
       if (item.type !== "error") return false
-      return /timeout|failed|failure|crash|conflict|blocked|error/i.test(item.text)
+      return NOISE_KEYWORDS.test(item.text)
     }).length >= NOISE_MIN
   )
 }
@@ -66,7 +71,9 @@ export const TeamShutdownAllTool = Tool.define("team_shutdown_all", {
     const live = team?.members.filter((member) => member.status !== "shutdown") ?? []
     const tasks = await TeamTasks.list(info.team.name)
     const mail = await Inbox.all(info.team.name, "lead").catch(() => [])
-    const wait = live.filter((member) => active(member, tasks) || !done(member, tasks, mail))
+    // Members who completed work should not block shutdown, even if still technically "busy".
+    // Paused members are explicitly suspended by the lead and should not block shutdown either.
+    const wait = live.filter((member) => member.status !== "paused" && !done(member, tasks, mail))
     const storm = noisy(mail, Date.now())
 
     if (!params.force && wait.length > 0 && !storm) {
@@ -123,6 +130,9 @@ export const TeamShutdownAllTool = Tool.define("team_shutdown_all", {
           ? "Repeated error/noise detected in the channel, so shutdown is allowed even with active work."
           : "All teammates appear to be done or ready to wrap up, so shutdown is safe.",
         blocked.length > 0 ? `Blocked: ${blocked.join("; ")}` : "",
+        blocked.length > 0 && storm
+          ? "Some members refused graceful shutdown despite noisy conditions — consider force=true to complete the shutdown."
+          : "",
         "After final delivery, call team_cleanup to end team mode and resume normal non-team chat unless the user asks for a team again.",
       ]
         .filter(Boolean)

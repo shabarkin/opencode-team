@@ -502,6 +502,115 @@ describe("team phase 4", () => {
     })
   })
 
+  test("busy member with submitted result does not block shutdown", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("phase4-shutdown-busy-done", "busy")
+        await Team.setMemberResultAt("phase4-shutdown-busy-done", "worker", Date.now())
+
+        const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
+        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        expect(out.title).toBe("Shutdown requested for all teammates")
+        expect(out.output).toContain("Requested shutdown for 1 teammate")
+        expect(shut).toHaveBeenCalledTimes(1)
+
+        shut.mockRestore()
+        await finish("phase4-shutdown-busy-done")
+      },
+    })
+  })
+
+  test("paused member does not block shutdown", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({})
+        const member = await Session.create({ parentID: lead.id })
+        await seed(lead.id)
+        await seed(member.id)
+        await Team.create({ name: "phase4-shutdown-paused", leadSessionID: lead.id })
+        await Team.addMember("phase4-shutdown-paused", {
+          name: "worker",
+          sessionID: member.id,
+          agent: "general",
+          status: "paused",
+          execution_status: "idle",
+          checkpoint: "none",
+          planApproval: "none",
+        })
+
+        const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
+        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        expect(out.title).toBe("Shutdown requested for all teammates")
+        expect(out.output).toContain("done or ready to wrap up")
+        expect(shut).toHaveBeenCalledTimes(1)
+
+        shut.mockRestore()
+        await finish("phase4-shutdown-paused")
+      },
+    })
+  })
+
+  test("busy→ready lifecycle with result allows shutdown", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("phase4-shutdown-lifecycle", "busy")
+        await Team.setMemberResultAt("phase4-shutdown-lifecycle", "worker", Date.now())
+        await Team.setMemberStatus("phase4-shutdown-lifecycle", "worker", "ready")
+
+        const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
+        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        expect(out.title).toBe("Shutdown requested for all teammates")
+        expect(out.output).toContain("done or ready to wrap up")
+        expect(shut).toHaveBeenCalledTimes(1)
+
+        shut.mockRestore()
+        await finish("phase4-shutdown-lifecycle")
+      },
+    })
+  })
+
+  test("storm path suggests force when graceful shutdown is blocked", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("phase4-shutdown-storm-blocked", "busy")
+        await TeamTasks.add("phase4-shutdown-storm-blocked", [
+          { id: "review", content: "Finish the review", status: "in_progress", priority: "high", assignee: "worker" },
+        ])
+        for (const id of ["im_b1", "im_b2", "im_b3", "im_b4", "im_b5", "im_b6"]) {
+          await Inbox.write("phase4-shutdown-storm-blocked", "lead", {
+            id,
+            from: "system",
+            text: `Noise ${id}`,
+            timestamp: Date.now(),
+            type: "error",
+            priority: "urgent",
+          })
+        }
+
+        const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "blocked", reason: "policy denied" })
+        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        expect(out.output).toContain("Repeated error/noise detected")
+        expect(out.output).toContain("Blocked")
+        expect(out.output).toContain("consider force=true")
+
+        shut.mockRestore()
+        await finish("phase4-shutdown-storm-blocked")
+      },
+    })
+  })
+
   test("team_shutdown_all force=true calls forceShutdownAll", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({
