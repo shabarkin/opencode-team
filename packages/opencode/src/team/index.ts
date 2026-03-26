@@ -43,6 +43,7 @@ import {
 import { TeamPolicy } from "./policy"
 import { MessageV2 } from "../session/message-v2"
 import { TeamScope } from "./scope"
+import { TEAM_LEAD_ONLY_IDS, TEAM_MEMBER_ALLOWED_IDS } from "../tool/team-ids"
 
 export {
   TeamEvent,
@@ -1176,13 +1177,22 @@ export namespace Team {
       })
     }
 
-    // Build permission rules for the child session
+    // Build permission rules for the child session.
+    // Deny lead-only tools, and explicitly allow all other team tools so that
+    // restrictive agents (those with "*": "deny") don't accidentally block
+    // team communication — session-level allows override agent-level denies
+    // because Permission.disabled() uses findLast and session rules come last.
     const rules: Rule[] = [
-      { permission: "team_create", pattern: "*", action: "deny" },
-      { permission: "team_spawn", pattern: "*", action: "deny" },
-      { permission: "team_shutdown", pattern: "*", action: "deny" },
-      { permission: "team_cleanup", pattern: "*", action: "deny" },
-      { permission: "team_approve_plan", pattern: "*", action: "deny" },
+      ...TEAM_LEAD_ONLY_IDS.map((tool) => ({
+        permission: tool,
+        pattern: "*",
+        action: "deny" as const,
+      })),
+      ...TEAM_MEMBER_ALLOWED_IDS.map((tool) => ({
+        permission: tool,
+        pattern: "*",
+        action: "allow" as const,
+      })),
     ]
     rules.push(...scopeRules(scope, tree?.path ?? Inst.directory))
     if (input.mode === "research") {
