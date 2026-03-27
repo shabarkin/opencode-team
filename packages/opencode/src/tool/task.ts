@@ -13,6 +13,9 @@ import { Config } from "../config/config"
 import { Permission } from "@/permission"
 import { Team } from "../team"
 import { TEAM_TOOL_IDS } from "./team-ids"
+import { Log } from "@/util/log"
+
+const log = Log.create({ service: "tool.task" })
 
 const parameters = z.object({
   description: z.string().describe("A short (3-5 words) description of the task"),
@@ -169,7 +172,12 @@ export const TaskTool = Tool.define("task", async (ctx) => {
       const messageID = MessageID.ascending()
 
       function cancel() {
-        SessionPrompt.cancel(session.id)
+        void SessionPrompt.cancel(session.id).catch((error) => {
+          log.warn("task child cancel failed", {
+            sessionID: session.id,
+            error: error instanceof Error ? error.message : String(error),
+          })
+        })
       }
       ctx.abort.addEventListener("abort", cancel)
       using _ = defer(() => ctx.abort.removeEventListener("abort", cancel))

@@ -17,6 +17,7 @@ import {
   TeamCreateTool,
   TeamHealthTool,
   TeamMessageTool,
+  TeamMergeTool,
   TeamReplyTool,
   TeamRequestSpawnTool,
   TeamRestartTool,
@@ -51,6 +52,7 @@ const ALL_TEAM_TOOL_IDS = [
   TeamApprovePlanTool.id,
   TeamShutdownAllTool.id,
   TeamShutdownTool.id,
+  TeamMergeTool.id,
   TeamCleanupTool.id,
   TeamPhaseTool.id,
   TeamStatusTool.id,
@@ -209,6 +211,129 @@ describe("task subagent team tool isolation", () => {
         prompt.mockRestore()
         await Team.setMemberStatus("task-team", "worker", "shutdown")
         await Team.cleanup("task-team")
+      },
+    })
+  })
+
+  test("plain task abort catches async cancel failures", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const parent = await Session.create({})
+        const parentSeed = await seed(parent.id)
+        const parentMsg = await assist(parent.id, parentSeed)
+        const ctl = new AbortController()
+        let done!: (value: any) => void
+        const wait = new Promise((resolve) => {
+          done = resolve
+        })
+        const prompt = spyOn(SessionPrompt, "prompt").mockImplementation((async () => {
+          return (await wait) as any
+        }) as any)
+        const cancel = spyOn(SessionPrompt, "cancel").mockRejectedValue(new Error("boom"))
+        const hits: unknown[] = []
+        const fn = (err: unknown) => {
+          hits.push(err)
+        }
+        process.on("unhandledRejection", fn)
+
+        try {
+          const tool = await TaskTool.init()
+          const run = tool.execute(
+            { description: "plain task", prompt: "Inspect the repo", subagent_type: "explore" },
+            {
+              ...ctx(parent.id, parentMsg, await Session.messages({ sessionID: parent.id })),
+              abort: ctl.signal,
+            },
+          )
+
+          await Bun.sleep(20)
+          ctl.abort()
+          await Bun.sleep(20)
+          done({ parts: [{ type: "text", text: "done" }] })
+
+          const result = await run
+          await Bun.sleep(20)
+
+          expect(cancel).toHaveBeenCalledTimes(1)
+          expect(cancel.mock.calls[0]?.[0]).toBe(result.metadata.sessionId)
+          expect(hits).toHaveLength(0)
+        } finally {
+          process.off("unhandledRejection", fn)
+          cancel.mockRestore()
+          prompt.mockRestore()
+        }
+      },
+    })
+  })
+
+  test("team delegate abort catches async cancel failures", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({})
+        const member = await Session.create({ parentID: lead.id })
+        await seed(lead.id)
+        const memberSeed = await seed(member.id)
+        const memberMsg = await assist(member.id, memberSeed)
+        const ctl = new AbortController()
+        let done!: (value: any) => void
+        const wait = new Promise((resolve) => {
+          done = resolve
+        })
+
+        await Team.create({ name: "delegate-abort-team", leadSessionID: lead.id })
+        await Team.addMember("delegate-abort-team", {
+          name: "worker",
+          sessionID: member.id,
+          agent: "general",
+          status: "ready",
+          checkpoint: "none",
+          planApproval: "none",
+        })
+
+        const prompt = spyOn(SessionPrompt, "prompt").mockImplementation((async () => {
+          return (await wait) as any
+        }) as any)
+        const cancel = spyOn(SessionPrompt, "cancel").mockRejectedValue(new Error("boom"))
+        const hits: unknown[] = []
+        const fn = (err: unknown) => {
+          hits.push(err)
+        }
+        process.on("unhandledRejection", fn)
+
+        try {
+          const tool = await TeamDelegateTool.init()
+          const run = tool.execute(
+            { description: "delegate task", prompt: "Inspect the plan", agent: "explore" },
+            {
+              ...ctx(member.id, memberMsg, await Session.messages({ sessionID: member.id })),
+              abort: ctl.signal,
+            },
+          )
+
+          await Bun.sleep(20)
+          ctl.abort()
+          await Bun.sleep(20)
+          done({ parts: [{ type: "text", text: "done" }] })
+
+          const result = await run
+          await Bun.sleep(20)
+
+          expect(cancel).toHaveBeenCalledTimes(1)
+          expect(cancel.mock.calls[0]?.[0]).toBe(result.metadata.sessionId)
+          expect(hits).toHaveLength(0)
+        } finally {
+          process.off("unhandledRejection", fn)
+          cancel.mockRestore()
+          prompt.mockRestore()
+          await Team.setMemberStatus("delegate-abort-team", "worker", "shutdown")
+          await Team.cleanup("delegate-abort-team")
+        }
       },
     })
   })

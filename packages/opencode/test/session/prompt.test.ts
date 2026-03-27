@@ -401,3 +401,42 @@ describe("session.prompt steer", () => {
     })
   })
 })
+
+describe("session.prompt shell", () => {
+  test("waits for async cancel cleanup before returning", async () => {
+    await using tmp = await tmpdir({ git: true })
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({})
+        const get = Session.get
+        let calls = 0
+        const spy = spyOn(Session, "get").mockImplementation((async (...args) => {
+          calls++
+          if (calls === 2) await Bun.sleep(20)
+          return get(...(args as Parameters<typeof Session.get>))
+        }) as typeof Session.get)
+
+        const msg = await SessionPrompt.shell({
+          sessionID: session.id,
+          agent: "general",
+          model: {
+            providerID: ProviderID.make("test"),
+            modelID: ModelID.make("test"),
+          },
+          command: "printf shell-ok",
+        })
+
+        await expect(SessionPrompt.assertNotBusy(session.id)).resolves.toBeUndefined()
+        expect(msg.parts[0]?.type).toBe("tool")
+        if (msg.parts[0]?.type === "tool" && msg.parts[0].state.status === "completed") {
+          expect(msg.parts[0].state.output).toContain("shell-ok")
+        }
+
+        spy.mockRestore()
+        await Session.remove(session.id)
+      },
+    })
+  })
+})

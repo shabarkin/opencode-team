@@ -1580,17 +1580,18 @@ NOTE: At any point in time through this workflow you should feel free to ask the
       throw new Session.BusyError(input.sessionID)
     }
 
-    using _ = defer(() => {
+    await using _ = defer(async () => {
       // If no queued callbacks, cancel (the default)
       const callbacks = state()[input.sessionID]?.callbacks ?? []
       if (callbacks.length === 0) {
-        cancel(input.sessionID)
-      } else {
-        // Otherwise, trigger the session loop to process queued items
-        loop({ sessionID: input.sessionID, resume_existing: true }).catch((error) => {
-          log.error("session loop failed to resume after shell command", { sessionID: input.sessionID, error })
-        })
+        await cancel(input.sessionID)
+        return
       }
+
+      // Otherwise, trigger the session loop to process queued items
+      loop({ sessionID: input.sessionID, resume_existing: true }).catch((error) => {
+        log.error("session loop failed to resume after shell command", { sessionID: input.sessionID, error })
+      })
     })
 
     const session = await Session.get(input.sessionID)

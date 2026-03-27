@@ -45,6 +45,12 @@ function errorText(result: { stdout: string; stderr: string }) {
   return [result.stderr, result.stdout].filter(Boolean).join("\n")
 }
 
+async function prune(dir: string) {
+  const result = await git(dir, ["worktree", "prune"])
+  if (result.exitCode === 0) return
+  throw new Error(errorText(result) || `Failed to prune worktrees in ${dir}.`)
+}
+
 export namespace TeamWorktree {
   export async function isGitRepo(dir: string): Promise<boolean> {
     return (await git(dir, ["rev-parse", "--git-dir"])).exitCode === 0
@@ -98,13 +104,23 @@ export namespace TeamWorktree {
       await fs.rm(opts.worktreePath, { recursive: true, force: true }).catch(() => undefined)
     }
 
-    const deleted = await git(opts.repoDir, ["branch", "-D", opts.branch])
+    await prune(opts.repoDir)
+
+    let deleted = await git(opts.repoDir, ["branch", "-D", opts.branch])
+    if (deleted.exitCode !== 0 && errorText(deleted).includes("used by worktree")) {
+      await prune(opts.repoDir)
+      deleted = await git(opts.repoDir, ["branch", "-D", opts.branch])
+    }
     if (deleted.exitCode === 0) return
+
+    const text = errorText(deleted)
+    if (text.includes("not found")) return
     log.warn("worktree branch delete failed", {
       worktreePath: opts.worktreePath,
       branch: opts.branch,
-      error: errorText(deleted),
+      error: text,
     })
+    throw new Error(text || `Failed to delete worktree branch ${opts.branch}.`)
   }
 
   export async function removeAll(opts: {

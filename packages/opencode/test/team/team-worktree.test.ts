@@ -137,6 +137,36 @@ describe("team worktree", () => {
     })
   })
 
+  test("TeamWorktree.remove prunes stale metadata when the directory is already missing", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const tree = await TeamWorktree.create({
+          repoDir: tmp.path,
+          teamName: "worktree-team",
+          memberName: "prune",
+          projectID: Instance.project.id,
+        })
+
+        expect(tree).not.toBeNull()
+        await fs.rm(tree!.path, { recursive: true, force: true })
+        await TeamWorktree.remove({
+          repoDir: tmp.path,
+          worktreePath: tree!.path,
+          branch: tree!.branch,
+        })
+
+        const list = await git(tmp.path, ["worktree", "list", "--porcelain"])
+        expect(list.stdout).not.toContain(tree!.path)
+        expect(
+          (await git(tmp.path, ["show-ref", "--verify", "--quiet", `refs/heads/${tree!.branch}`])).exitCode,
+        ).not.toBe(0)
+      },
+    })
+  })
+
   test("spawnMember uses worktree path as session directory when worktrees are enabled", async () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
