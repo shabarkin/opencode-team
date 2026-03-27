@@ -66,6 +66,18 @@ export const TeamCreateTool = Tool.define("team_create", {
       .boolean()
       .optional()
       .describe("If true, send low-priority read receipts when teammates read inbox messages."),
+    collect_strict: z
+      .boolean()
+      .optional()
+      .describe(
+        "If true, team_collect requires fresh structured results by default before a member counts as collected.",
+      ),
+    require_result_before_shutdown: z
+      .boolean()
+      .optional()
+      .describe(
+        "If true, shutdown is blocked for teammates with in-progress assigned tasks until they submit a result.",
+      ),
     output_format: OutputFormat.optional().describe(
       "Optional final lead output shape. Use 'single_synthesis' to force one concise narrative synthesis.",
     ),
@@ -92,7 +104,9 @@ export const TeamCreateTool = Tool.define("team_create", {
       name: params.name,
       leadSessionID: ctx.sessionID,
       delegate: params.delegate,
+      collect_strict: params.collect_strict,
       maxCost: params.max_cost,
+      require_result_before_shutdown: params.require_result_before_shutdown,
       receipts: params.receipts,
       output_format: params.output_format,
       team_phase: "spawning",
@@ -121,7 +135,13 @@ export const TeamCreateTool = Tool.define("team_create", {
       output: [
         `Team "${params.name}" created. You are the lead.`,
         params.delegate ? "DELEGATE MODE: You are restricted to coordination tools only (no write/edit/bash)." : "",
+        params.collect_strict
+          ? "Strict collection enabled: team_collect now requires fresh structured results by default."
+          : "",
         params.max_cost ? `Team budget cap: $${params.max_cost.toFixed(2)}.` : "",
+        params.require_result_before_shutdown
+          ? "Shutdown guard enabled: teammates with in-progress tasks must submit a result before shutdown."
+          : "",
         "",
         "LEAD ROLE (while this team is active):",
         "- Own the goal, task breakdown, delegation, pacing, and final synthesis",
@@ -176,7 +196,13 @@ export const TeamCreateTool = Tool.define("team_create", {
       ]
         .filter(Boolean)
         .join("\n"),
-      metadata: { teamName: params.name, delegate: !!params.delegate, maxCost: params.max_cost },
+      metadata: {
+        teamName: params.name,
+        delegate: !!params.delegate,
+        collectStrict: !!params.collect_strict,
+        maxCost: params.max_cost,
+        requireResultBeforeShutdown: !!params.require_result_before_shutdown,
+      },
     }
   },
 })

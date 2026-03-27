@@ -383,6 +383,37 @@ describe("team phase 2", () => {
     })
   })
 
+  test("team_create stores completion policy defaults", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({})
+        await seed(lead.id)
+
+        const create = await (
+          await TeamCreateTool.init()
+        ).execute(
+          {
+            name: "phase2-team-policy",
+            collect_strict: true,
+            require_result_before_shutdown: true,
+          },
+          ctx(lead.id),
+        )
+
+        expect(create.output).toContain('Team "phase2-team-policy" created. You are the lead.')
+        expect(await Team.get("phase2-team-policy")).toMatchObject({
+          collect_strict: true,
+          require_result_before_shutdown: true,
+        })
+
+        await Team.cleanup("phase2-team-policy")
+      },
+    })
+  })
+
   test("member cost limits pause workers and team_status shows budget details", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({

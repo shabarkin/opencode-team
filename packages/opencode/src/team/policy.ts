@@ -57,6 +57,9 @@ export namespace TeamPolicy {
     teamName: string
     name: string
     tasksRemaining: number
+    tasksInProgress: number
+    requireResult: boolean
+    hasResult: boolean
   }): Promise<{ allow: boolean; reason?: string }> {
     return Plugin.trigger("team.shutdown.before", input, { allow: true, reason: undefined as string | undefined })
   }

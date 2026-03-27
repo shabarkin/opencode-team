@@ -6,7 +6,7 @@ import { ModelID, ProviderID } from "../../src/provider/schema"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Session } from "../../src/session"
 import { Storage } from "../../src/storage/storage"
-import { Team } from "../../src/team"
+import { Team, TeamTasks } from "../../src/team"
 import { TeamCollectTool } from "../../src/tool/team-collect"
 import { TeamSubmitResultTool } from "../../src/tool/team-inbox"
 import { TeamStatusTool } from "../../src/tool/team-status"
@@ -48,12 +48,16 @@ function ctx(sessionID: string, messages: any[] = []) {
   } as any
 }
 
-async function basic(name: string, status: "ready" | "busy" | "shutdown" = "busy") {
+async function basic(
+  name: string,
+  status: "ready" | "busy" | "shutdown" = "busy",
+  opts?: { collect_strict?: boolean },
+) {
   const lead = await Session.create({})
   const member = await Session.create({ parentID: lead.id })
   await seed(lead.id)
   await seed(member.id)
-  await Team.create({ name, leadSessionID: lead.id })
+  await Team.create({ name, leadSessionID: lead.id, collect_strict: opts?.collect_strict })
   await Team.addMember(name, {
     name: "worker",
     sessionID: member.id,
@@ -132,6 +136,132 @@ describe("team collect", () => {
         expect(out.output).toContain('"worker" is ready with no structured result yet')
 
         await finish("collect-ready-no-result")
+      },
+    })
+  })
+
+  test("team_collect strict mode waits for a fresh structured result", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
+        const { lead } = await basic("collect-strict", "ready", { collect_strict: true })
+        let now = 0
+        const time = spyOn(Date, "now").mockImplementation(() => {
+          now += 6_000
+          return now
+        })
+
+        const out = await (
+          await TeamCollectTool.init()
+        ).execute({ members: ["worker"], timeout_seconds: 10, poll_interval_seconds: 5 }, ctx(lead.id))
+
+        expect(out.metadata).toMatchObject({ collected: [], pending: ["worker"], timed_out: true })
+        expect(out.output).toContain("fresh structured result")
+
+        time.mockRestore()
+        sleep.mockRestore()
+        await finish("collect-strict")
+      },
+    })
+  })
+
+  test("team_collect strict mode ignores results from before a later task claim", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
+        const { lead, member } = await basic("collect-strict-claim", "ready", { collect_strict: true })
+
+        await (
+          await TeamSubmitResultTool.init()
+        ).execute(
+          {
+            title: "Old result",
+            summary: "This should stop counting after a new claim.",
+            status: "success",
+          },
+          ctx(member.id),
+        )
+
+        await TeamTasks.add("collect-strict-claim", [
+          { id: "t1", content: "Do the next task", status: "pending", priority: "high" },
+        ])
+        await TeamTasks.claim("collect-strict-claim", "t1", "worker")
+
+        let now = 0
+        const time = spyOn(Date, "now").mockImplementation(() => {
+          now += 6_000
+          return now
+        })
+
+        const out = await (
+          await TeamCollectTool.init()
+        ).execute({ members: ["worker"], timeout_seconds: 10, poll_interval_seconds: 5 }, ctx(lead.id))
+
+        expect(out.metadata).toMatchObject({ collected: [], pending: ["worker"], timed_out: true })
+        expect(out.output).not.toContain("Old result")
+        expect(out.output).toContain("fresh structured result")
+
+        time.mockRestore()
+        sleep.mockRestore()
+        await finish("collect-strict-claim")
+      },
+    })
+  })
+
+  test("team_collect strict mode can allow idle members without results", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("collect-strict-idle", "ready")
+        const out = await (
+          await TeamCollectTool.init()
+        ).execute(
+          {
+            members: ["worker"],
+            require_structured_result: true,
+            allow_idle_without_result: true,
+          },
+          ctx(lead.id),
+        )
+
+        expect(out.metadata).toMatchObject({ collected: ["worker"], pending: [], timed_out: false })
+        expect(out.output).toContain('"worker" is ready with no structured result yet')
+
+        await finish("collect-strict-idle")
+      },
+    })
+  })
+
+  test("team_collect strict mode supports waive overrides", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("collect-waive")
+        const out = await (
+          await TeamCollectTool.init()
+        ).execute(
+          {
+            members: ["worker"],
+            require_structured_result: true,
+            waive: ["worker"],
+          },
+          ctx(lead.id),
+        )
+
+        expect(out.metadata).toMatchObject({ collected: ["worker"], pending: [], timed_out: false })
+        expect(out.output).toContain("Waived by lead")
+
+        await finish("collect-waive")
       },
     })
   })

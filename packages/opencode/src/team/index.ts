@@ -370,7 +370,10 @@ function normalizeTeam(team: TeamInfo): TeamInfo {
   return {
     ...team,
     members: team.members.map(normalizeMember),
+    collect_strict: typeof team.collect_strict === "boolean" ? team.collect_strict : false,
     maxCost: typeof team.maxCost === "number" && Number.isFinite(team.maxCost) ? team.maxCost : undefined,
+    require_result_before_shutdown:
+      typeof team.require_result_before_shutdown === "boolean" ? team.require_result_before_shutdown : false,
     receipts: typeof team.receipts === "boolean" ? team.receipts : false,
     scope: TeamScopeSchema.safeParse(team.scope).success ? team.scope : undefined,
     team_phase: TeamPhaseLevel.safeParse(team.team_phase).success ? team.team_phase : undefined,
@@ -536,7 +539,9 @@ export namespace Team {
       name: TeamNameSchema,
       leadSessionID: z.string(),
       delegate: z.boolean().optional(),
+      collect_strict: z.boolean().optional(),
       maxCost: z.number().nonnegative().optional(),
+      require_result_before_shutdown: z.boolean().optional(),
       receipts: z.boolean().optional(),
       output_format: OutputFormat.optional(),
       team_phase: TeamPhaseLevel.optional(),
@@ -559,10 +564,12 @@ export namespace Team {
         leadSessionID: input.leadSessionID,
         members: [],
         created: Date.now(),
+        collect_strict: input.collect_strict ?? false,
         receipts: input.receipts ?? false,
         output_format: input.output_format ?? "free",
         delivered: input.delivered ?? false,
         ...(typeof input.maxCost === "number" ? { maxCost: input.maxCost } : {}),
+        require_result_before_shutdown: input.require_result_before_shutdown ?? false,
         pending_spawn_requests: [],
         ...(input.delegate ? { delegate: true } : {}),
         ...(input.team_phase ? { team_phase: input.team_phase } : {}),
@@ -854,6 +861,19 @@ export namespace Team {
         const member = draft.members.find((item) => item.name === memberName)
         if (!member) return
         member.last_result_at = time
+        member.updated = Date.now()
+      })
+    } catch {
+      // Team not found — ignore
+    }
+  }
+
+  export async function setMemberAssignedAt(teamName: string, memberName: string, time: number): Promise<void> {
+    try {
+      await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+        const member = draft.members.find((item) => item.name === memberName)
+        if (!member) return
+        member.assigned_at = time
         member.updated = Date.now()
       })
     } catch {
@@ -1634,6 +1654,7 @@ export namespace Team {
     | { status: "requested" }
   > {
     const { TeamMessaging } = await import("./messaging")
+    const { Inbox } = await import("./inbox")
     const { SessionPrompt } = await import("../session/prompt")
     const { SessionID } = await import("../session/schema")
 
@@ -1643,12 +1664,32 @@ export namespace Team {
     if (member.status === "shutdown") return { status: "already_shutdown" }
 
     const tasks = await TeamTasks.list(input.teamName)
+    const mark = member.assigned_at ?? 0
+    const open = tasks.filter((task) => task.assignee === input.memberName && task.status === "in_progress").length
+    const mail = await Inbox.all(input.teamName, "lead").catch(() => [])
+    const fresh =
+      (typeof member.last_result_at === "number" && member.last_result_at >= mark) ||
+      mail.some(
+        (item) =>
+          item.from === input.memberName &&
+          (item.type === "result" || !!item.metadata?.result) &&
+          item.timestamp >= mark,
+      )
+    if (team.require_result_before_shutdown && open > 0 && !fresh) {
+      return {
+        status: "blocked",
+        reason: `Team policy requires a submitted result before shutting down "${input.memberName}" while assigned work is still in progress.`,
+      }
+    }
     const guard = await TeamPolicy.shutdownBefore({
       teamName: input.teamName,
       name: input.memberName,
       tasksRemaining: tasks.filter(
         (task) => task.assignee === input.memberName && task.status !== "completed" && task.status !== "cancelled",
       ).length,
+      tasksInProgress: open,
+      requireResult: team.require_result_before_shutdown ?? false,
+      hasResult: fresh,
     })
     if (!guard.allow) {
       return {
@@ -2306,6 +2347,7 @@ export namespace TeamTasks {
   export async function claim(teamName: string, taskId: string, memberName: string): Promise<boolean> {
     let claimed = false
     let content = ""
+    const mark = Date.now()
     try {
       await Storage.update<TeamTask[]>(tasksKey(teamName), (tasks) => {
         const task = tasks.find((t) => t.id === taskId)
@@ -2331,6 +2373,7 @@ export namespace TeamTasks {
     }
 
     if (claimed) {
+      await Team.setMemberAssignedAt(teamName, memberName, mark)
       await Bus.publish(TeamEvent.TaskClaimed, { teamName, taskId, memberName })
       await TeamPolicy.taskClaimed({ teamName, taskId, taskContent: content, claimedBy: memberName })
     }

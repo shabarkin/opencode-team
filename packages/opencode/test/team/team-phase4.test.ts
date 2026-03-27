@@ -11,7 +11,7 @@ import { SessionPrompt } from "../../src/session/prompt"
 import { SubmittedResultSchema, Team, TeamTasks } from "../../src/team"
 import { TeamPolicy } from "../../src/team/policy"
 import { TeamScope } from "../../src/team/scope"
-import { TeamCleanupTool, TeamSpawnTool } from "../../src/tool/team"
+import { TeamCleanupTool, TeamShutdownTool, TeamSpawnTool } from "../../src/tool/team"
 import { TeamPhaseTool, TeamShutdownAllTool } from "../../src/tool/team-lifecycle"
 import { TeamInboxTool, TeamSubmitResultTool, TeamWaitTool } from "../../src/tool/team-inbox"
 import { TeamStatusTool } from "../../src/tool/team-status"
@@ -53,12 +53,20 @@ function ctx(sessionID: string, messages: any[] = []) {
   } as any
 }
 
-async function basic(name: string, status: "ready" | "busy" | "error" = "ready") {
+async function basic(
+  name: string,
+  status: "ready" | "busy" | "error" = "ready",
+  opts?: { require_result_before_shutdown?: boolean },
+) {
   const lead = await Session.create({})
   const member = await Session.create({ parentID: lead.id })
   await seed(lead.id)
   await seed(member.id)
-  await Team.create({ name, leadSessionID: lead.id })
+  await Team.create({
+    name,
+    leadSessionID: lead.id,
+    require_result_before_shutdown: opts?.require_result_before_shutdown,
+  })
   await Team.addMember(name, {
     name: "worker",
     sessionID: member.id,
@@ -381,6 +389,66 @@ describe("team phase 4", () => {
 
         shut.mockRestore()
         await finish("phase4-shutdown-defer")
+      },
+    })
+  })
+
+  test("team_shutdown blocks in-progress work without a submitted result when policy requires it", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead } = await basic("phase4-shutdown-needs-result", "busy", {
+          require_result_before_shutdown: true,
+        })
+        await TeamTasks.add("phase4-shutdown-needs-result", [
+          { id: "review", content: "Finish the review", status: "in_progress", priority: "high", assignee: "worker" },
+        ])
+
+        const out = await (await TeamShutdownTool.init()).execute({ name: "worker" }, ctx(lead.id))
+        expect(out.title).toBe("Shutdown blocked")
+        expect(out.output).toContain("requires a submitted result")
+        expect(
+          (await Team.get("phase4-shutdown-needs-result"))?.members.find((item) => item.name === "worker")?.status,
+        ).toBe("busy")
+
+        await finish("phase4-shutdown-needs-result")
+      },
+    })
+  })
+
+  test("team_shutdown blocks stale results from before a later task claim", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const { lead, member } = await basic("phase4-shutdown-stale-result", "ready", {
+          require_result_before_shutdown: true,
+        })
+
+        await (
+          await TeamSubmitResultTool.init()
+        ).execute(
+          {
+            title: "Old result",
+            summary: "This should stop counting after a new claim.",
+            status: "success",
+          },
+          ctx(member.id),
+        )
+
+        await TeamTasks.add("phase4-shutdown-stale-result", [
+          { id: "review", content: "Finish the review", status: "pending", priority: "high" },
+        ])
+        await TeamTasks.claim("phase4-shutdown-stale-result", "review", "worker")
+
+        const out = await (await TeamShutdownTool.init()).execute({ name: "worker" }, ctx(lead.id))
+        expect(out.title).toBe("Shutdown blocked")
+        expect(out.output).toContain("requires a submitted result")
+
+        await finish("phase4-shutdown-stale-result")
       },
     })
   })

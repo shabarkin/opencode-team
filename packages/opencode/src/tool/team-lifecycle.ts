@@ -28,10 +28,16 @@ function done(
   items: Awaited<ReturnType<typeof Inbox.all>>,
 ) {
   if (member.status === "shutdown_requested") return true
-  // Fallback to member.updated when assigned_at is unset (e.g., member added directly in non-"busy" state).
-  // In production, spawnMember() always sets assigned_at via the "busy" status path.
-  const mark = member.assigned_at ?? member.updated ?? 0
+  const mark = member.assigned_at ?? 0
   if (typeof member.last_result_at === "number" && member.last_result_at >= mark) return true
+  if (
+    items.some(
+      (item) =>
+        item.from === member.name && (item.type === "result" || !!item.metadata?.result) && item.timestamp >= mark,
+    )
+  ) {
+    return true
+  }
   const own = tasks.filter((task) => task.assignee === member.name)
   if (own.length > 0 && own.every((task) => DONE_TASK.has(task.status))) return true
   return items.some(

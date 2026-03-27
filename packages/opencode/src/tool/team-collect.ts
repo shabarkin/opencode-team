@@ -37,10 +37,19 @@ function current(
   if (item.timestamp >= member.assigned_at) return item
 }
 
+function picked(team: NonNullable<Awaited<ReturnType<typeof Team.get>>>, names: string[], waive: string[]) {
+  const miss = waive.filter((name) => !names.includes(name) || !team.members.some((member) => member.name === name))
+  if (miss.length > 0) {
+    return { ok: false as const, error: `Unknown or unselected teammate(s) in waive: ${miss.join(", ")}.` }
+  }
+  return { ok: true as const, names: new Set(waive) }
+}
+
 function scan(
   team: NonNullable<Awaited<ReturnType<typeof Team.get>>>,
   items: Awaited<ReturnType<typeof Inbox.all>>,
   names: string[],
+  opts: { strict: boolean; idle: boolean; waive: Set<string> },
 ) {
   const collected: string[] = []
   const pending: string[] = []
@@ -55,12 +64,20 @@ function scan(
       notes.push([`## ${name}`, item.text].join("\n"))
       continue
     }
-    if (member.status === "ready" || member.status === "shutdown") {
+    if (opts.waive.has(name)) {
+      collected.push(name)
+      notes.push(`## ${name}\nWaived by lead. No fresh structured result was required for this teammate.`)
+      continue
+    }
+    if ((member.status === "ready" || member.status === "shutdown") && (!opts.strict || opts.idle)) {
       collected.push(name)
       notes.push(`## ${name}\n"${name}" is ${member.status} with no structured result yet.`)
       continue
     }
     pending.push(name)
+    if (opts.strict) {
+      notes.push(`## ${name}\nStill waiting for a fresh structured result after the latest assignment.`)
+    }
   }
 
   return { collected, pending, notes }
@@ -91,6 +108,18 @@ export const TeamCollectTool = Tool.define("team_collect", {
       .array(MemberNameSchema)
       .optional()
       .describe("Optional teammate names to wait for. Defaults to all non-shutdown teammates."),
+    require_structured_result: z
+      .boolean()
+      .optional()
+      .describe("If true, only fresh structured results count as collected unless explicitly waived."),
+    allow_idle_without_result: z
+      .boolean()
+      .optional()
+      .describe("If true, ready or shutdown teammates may still count as collected without a fresh result."),
+    waive: z
+      .array(MemberNameSchema)
+      .optional()
+      .describe("Optional teammate names to treat as collected without a fresh structured result."),
     timeout_seconds: z.number().int().min(10).max(600).optional(),
     poll_interval_seconds: z.number().int().min(5).max(60).optional(),
   }),
@@ -112,6 +141,17 @@ export const TeamCollectTool = Tool.define("team_collect", {
         metadata: { collected: [], pending: [], timed_out: false },
       }
     }
+    if (!team) {
+      return { title: "Error", output: `Team "${info.team.name}" not found.`, metadata: {} }
+    }
+
+    const waive = picked(team, target.names, [...new Set(params.waive ?? [])])
+    if (!waive.ok) {
+      return { title: "Error", output: waive.error, metadata: {} }
+    }
+
+    const strict = params.require_structured_result ?? team.collect_strict ?? false
+    const idle = params.allow_idle_without_result ?? !strict
 
     await Team.setTeamPhase(info.team.name, "synthesis")
 
@@ -124,13 +164,23 @@ export const TeamCollectTool = Tool.define("team_collect", {
         return { title: "Error", output: `Team "${info.team.name}" not found.`, metadata: {} }
       }
 
-      const state = scan(next, await Inbox.all(info.team.name, "lead"), target.names)
+      const state = scan(next, await Inbox.all(info.team.name, "lead"), target.names, {
+        strict,
+        idle,
+        waive: waive.names,
+      })
       if (state.pending.length === 0) {
         await Team.setDelivered(info.team.name, true)
         return {
           title: "Collected team results",
           output: text(state, false),
-          metadata: { collected: state.collected, pending: state.pending, timed_out: false },
+          metadata: {
+            collected: state.collected,
+            pending: state.pending,
+            strict,
+            timed_out: false,
+            waive: [...waive.names],
+          },
         }
       }
 
@@ -138,7 +188,13 @@ export const TeamCollectTool = Tool.define("team_collect", {
         return {
           title: "Team collection timed out",
           output: text(state, true),
-          metadata: { collected: state.collected, pending: state.pending, timed_out: true },
+          metadata: {
+            collected: state.collected,
+            pending: state.pending,
+            strict,
+            timed_out: true,
+            waive: [...waive.names],
+          },
         }
       }
 
