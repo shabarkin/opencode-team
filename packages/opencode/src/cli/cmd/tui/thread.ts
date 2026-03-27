@@ -97,6 +97,11 @@ export const TuiThreadCommand = cmd({
       .option("agent", {
         type: "string",
         describe: "agent to use",
+      })
+      .option("worktrees", {
+        type: "boolean",
+        default: false,
+        describe: "enable isolated teammate git worktrees for agent teams",
       }),
   handler: async (args) => {
     // Keep ENABLE_PROCESSED_INPUT cleared even if other code flips it.
@@ -127,6 +132,7 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
+      process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES = args.worktrees ? "true" : "false"
 
       const worker = new Worker(file, {
         env: Object.fromEntries(

@@ -67,6 +67,7 @@ export namespace Flag {
   )
   export const OPENCODE_EXPERIMENTAL_PLAN_MODE = OPENCODE_EXPERIMENTAL || truthy("OPENCODE_EXPERIMENTAL_PLAN_MODE")
   export declare const OPENCODE_EXPERIMENTAL_AGENT_TEAMS: boolean
+  export declare const OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES: boolean
   export const OPENCODE_EXPERIMENTAL_WORKSPACES = OPENCODE_EXPERIMENTAL || truthy("OPENCODE_EXPERIMENTAL_WORKSPACES")
   export const OPENCODE_EXPERIMENTAL_MARKDOWN = !falsy("OPENCODE_EXPERIMENTAL_MARKDOWN")
   export const OPENCODE_MODELS_URL = process.env["OPENCODE_MODELS_URL"]
@@ -134,6 +135,14 @@ Object.defineProperty(Flag, "OPENCODE_CLIENT", {
 Object.defineProperty(Flag, "OPENCODE_EXPERIMENTAL_AGENT_TEAMS", {
   get() {
     return Flag.OPENCODE_EXPERIMENTAL || truthy("OPENCODE_EXPERIMENTAL_AGENT_TEAMS")
+  },
+  enumerable: true,
+  configurable: false,
+})
+
+Object.defineProperty(Flag, "OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES", {
+  get() {
+    return truthy("OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES")
   },
   enumerable: true,
   configurable: false,

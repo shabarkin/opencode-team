@@ -388,7 +388,7 @@ export const SessionRoutes = lazy(() =>
       ),
       async (c) => {
         const sessionID = c.req.valid("param").sessionID
-        SessionPrompt.cancel(sessionID)
+        await SessionPrompt.cancel(sessionID)
 
         try {
           const { Team } = await import("@/team")
@@ -792,7 +792,7 @@ export const SessionRoutes = lazy(() =>
       ),
       async (c) => {
         const params = c.req.valid("param")
-        SessionPrompt.assertNotBusy(params.sessionID)
+        await SessionPrompt.assertNotBusy(params.sessionID)
         await Session.removeMessage({
           sessionID: params.sessionID,
           messageID: params.messageID,

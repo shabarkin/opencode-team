@@ -8,9 +8,15 @@ import { Installation } from "../../installation"
 
 export const ServeCommand = cmd({
   command: "serve",
-  builder: (yargs) => withNetworkOptions(yargs),
+  builder: (yargs) =>
+    withNetworkOptions(yargs).option("worktrees", {
+      type: "boolean",
+      default: false,
+      describe: "enable isolated teammate git worktrees for agent teams",
+    }),
   describe: "starts a headless opencode server",
   handler: async (args) => {
+    process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES = args.worktrees ? "true" : "false"
     if (!Flag.OPENCODE_SERVER_PASSWORD) {
       console.log("Warning: OPENCODE_SERVER_PASSWORD is not set; server is unsecured.")
     }

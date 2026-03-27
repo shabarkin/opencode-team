@@ -41,6 +41,8 @@ export const TeamStatusTool = Tool.define("team_status", {
           `exec=${m.execution_status ?? "idle"}`,
           m.model ?? "",
           m.worktreeBranch ? `worktree=${m.worktreeBranch}` : "",
+          m.worktreeBranch ? `merge=${m.mergeStatus ?? "pending"}` : "",
+          m.mergeError ? `merge_error=${m.mergeError.split("\n")[0]}` : "",
           m.phase ? `phase=${m.phase}` : "",
           m.planApproval && m.planApproval !== "none" ? `plan=${m.planApproval}` : "",
           m.checkpoint && m.checkpoint !== "none" ? `checkpoint=${m.checkpoint}` : "",
@@ -70,7 +72,7 @@ export const TeamStatusTool = Tool.define("team_status", {
     const cancelled = tasks.filter((t) => t.status === "cancelled").length
 
     const sections = [
-      `Team: ${team.name}${team.delegate ? " [DELEGATE MODE]" : ""}`,
+      `Team: ${team.name}${team.delegate ? " [DELEGATE MODE]" : ""}${team.worktrees ? " [WORKTREES]" : ""}`,
       `Role: ${info.role}${info.memberName ? ` (${info.memberName})` : ""}`,
       `team_phase=${team.team_phase ?? "none"}`,
       `delivered=${team.delivered ? "yes" : "no"}`,

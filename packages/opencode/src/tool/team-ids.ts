@@ -15,6 +15,7 @@ export const TEAM_TOOL_IDS = [
   "team_approve_plan",
   "team_shutdown_all",
   "team_shutdown",
+  "team_merge",
   "team_cleanup",
   "team_phase",
   "team_status",
@@ -28,6 +29,7 @@ export const TEAM_LEAD_ONLY_IDS = [
   "team_create",
   "team_spawn",
   "team_shutdown",
+  "team_merge",
   "team_cleanup",
   "team_approve_plan",
 ] as const

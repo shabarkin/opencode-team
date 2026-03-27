@@ -89,14 +89,14 @@ export namespace TeamWorktree {
   }
 
   export async function remove(opts: { repoDir: string; worktreePath: string; branch: string }): Promise<void> {
-    if (!(await exists(opts.worktreePath))) return
+    if (await exists(opts.worktreePath)) {
+      const removed = await git(opts.repoDir, ["worktree", "remove", "--force", opts.worktreePath])
+      if (removed.exitCode !== 0) {
+        throw new Error(errorText(removed) || `Failed to remove worktree ${opts.worktreePath}.`)
+      }
 
-    const removed = await git(opts.repoDir, ["worktree", "remove", "--force", opts.worktreePath])
-    if (removed.exitCode !== 0) {
-      throw new Error(errorText(removed) || `Failed to remove worktree ${opts.worktreePath}.`)
+      await fs.rm(opts.worktreePath, { recursive: true, force: true }).catch(() => undefined)
     }
-
-    await fs.rm(opts.worktreePath, { recursive: true, force: true }).catch(() => undefined)
 
     const deleted = await git(opts.repoDir, ["branch", "-D", opts.branch])
     if (deleted.exitCode === 0) return

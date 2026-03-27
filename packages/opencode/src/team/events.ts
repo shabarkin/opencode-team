@@ -84,6 +84,9 @@ export const ExecutionStatus = z.enum([
 ])
 export type ExecutionStatus = z.infer<typeof ExecutionStatus>
 
+export const MergeStatus = z.enum(["pending", "skipped", "merged", "conflict"])
+export type MergeStatus = z.infer<typeof MergeStatus>
+
 /** Validates safe identifiers for team/member names — prevents path traversal */
 const SafeName = z
   .string()
@@ -109,6 +112,9 @@ export const TeamMemberSchema = z.object({
   maxCost: z.number().nonnegative().optional(),
   worktreePath: z.string().optional(),
   worktreeBranch: z.string().optional(),
+  mergeStatus: MergeStatus.optional(),
+  mergeError: z.string().optional(),
+  mergedAt: z.number().optional(),
   scope: TeamScopeSchema.optional(),
   mode: TeamMode.optional(),
   phase: MemberPhase.optional(),
@@ -141,6 +147,7 @@ export const TeamInfoSchema = z.object({
   require_result_before_shutdown: z.boolean().optional(),
   scope: TeamScopeSchema.optional(),
   receipts: z.boolean().optional(),
+  worktrees: z.boolean().optional(),
   team_phase: TeamPhaseLevel.optional(),
   delivered: z.boolean().optional(),
   output_format: OutputFormat.optional(),

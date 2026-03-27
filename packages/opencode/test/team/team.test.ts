@@ -706,6 +706,37 @@ describe("Team auto-cleanup", () => {
       },
     })
   })
+
+  test("auto-cleanup does not remove worktree teams", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const stop = Team.autoCleanup({ grace: 40 })
+
+        await Team.create({ name: "worktree-auto-team", leadSessionID: "ses_lead_wt_auto", worktrees: true })
+        await Team.addMember("worktree-auto-team", {
+          name: "worker-wt",
+          sessionID: "ses_wt_auto_1",
+          agent: "general",
+          status: "shutdown",
+          worktreePath: path.join(tmp.path, "missing"),
+          worktreeBranch: "team/worktree-auto-team/worker-wt",
+          mergeStatus: "pending",
+        })
+
+        await Bun.sleep(60)
+
+        expect(await Team.get("worktree-auto-team")).toBeDefined()
+
+        stop()
+        Team.cancelAutoCleanup("worktree-auto-team")
+      },
+    })
+  })
 })
 
 describe("Team messaging auto-wake", () => {

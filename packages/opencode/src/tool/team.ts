@@ -18,6 +18,7 @@ import { Session } from "../session"
 import { Agent } from "../agent/agent"
 import { Bus } from "../bus"
 import { TeamEvent } from "../team/events"
+import { Flag } from "../flag/flag"
 import { TeamStatusTool } from "./team-status"
 import { TeamNotepadTool } from "./team-notepad"
 import { TeamDelegateTool } from "./team-delegate"
@@ -108,6 +109,7 @@ export const TeamCreateTool = Tool.define("team_create", {
       maxCost: params.max_cost,
       require_result_before_shutdown: params.require_result_before_shutdown,
       receipts: params.receipts,
+      worktrees: Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES,
       output_format: params.output_format,
       team_phase: "spawning",
       delivered: false,
@@ -142,6 +144,9 @@ export const TeamCreateTool = Tool.define("team_create", {
         params.require_result_before_shutdown
           ? "Shutdown guard enabled: teammates with in-progress tasks must submit a result before shutdown."
           : "",
+        team.worktrees
+          ? "WORKTREES MODE: teammates get isolated git worktrees. Use team_merge before team_cleanup."
+          : "",
         "",
         "LEAD ROLE (while this team is active):",
         "- Own the goal, task breakdown, delegation, pacing, and final synthesis",
@@ -169,7 +174,8 @@ export const TeamCreateTool = Tool.define("team_create", {
         "  team_approve_plan — Approve a teammate's plan (if plan mode)",
         "  team_shutdown_all — Request shutdown for every active teammate",
         "  team_shutdown     — Gracefully stop a teammate",
-        "  team_cleanup      — Remove team resources (after all shutdown)",
+        "  team_merge        — Merge teammate worktree branches into the lead branch",
+        "  team_cleanup      — Remove team resources (after merge + shutdown)",
         "",
         "CRITICAL WORKFLOW:",
         "1. Break the goal into workstreams and capture them in team_tasks",
@@ -180,18 +186,23 @@ export const TeamCreateTool = Tool.define("team_create", {
         "6. Do NOT produce final output while any teammate is still working or mid-review",
         "7. Only shut teammates down after reviews are complete, or if repeated error/noise is overwhelming the channel",
         "8. Deliver ONE consolidated synthesis, then shut down the team",
+        team.worktrees ? "9. For worktree teams: team_merge → verify/tests → team_cleanup" : "",
         "",
         "DELIVERY DISCIPLINE:",
         "- Produce ONE consolidated synthesis after team_collect returns",
         "- Prefer delegation, steering, consensus-building, and result collection over direct execution by the lead",
         "- Do NOT rush teammates who are mid-way through a review or implementation pass",
         "- Do NOT re-send summaries or repeatedly offer next steps",
-        "- After delivery: team_shutdown_all → team_cleanup → done",
+        team.worktrees
+          ? "- After delivery in worktree mode: team_shutdown_all → team_merge → verify → team_cleanup → done"
+          : "- After delivery: team_shutdown_all → team_cleanup → done",
         params.output_format === "single_synthesis"
           ? "OUTPUT FORMAT: Produce one concise narrative synthesis. No matrices, scorecards, or checklists."
           : "",
         "",
-        "Lifecycle: spawn → work → shutdown → cleanup (auto if all shutdown)",
+        team.worktrees
+          ? "Lifecycle: spawn → work → shutdown → team_merge → verify → cleanup"
+          : "Lifecycle: spawn → work → shutdown → cleanup (auto if all shutdown)",
         params.tasks?.length ? `\nInitial tasks: ${params.tasks.length}` : "",
       ]
         .filter(Boolean)
@@ -202,6 +213,7 @@ export const TeamCreateTool = Tool.define("team_create", {
         collectStrict: !!params.collect_strict,
         maxCost: params.max_cost,
         requireResultBeforeShutdown: !!params.require_result_before_shutdown,
+        worktrees: team.worktrees === true,
       },
     }
   },
@@ -966,12 +978,65 @@ export const TeamShutdownTool = Tool.define("team_shutdown", {
 })
 
 /**
+ * Merge teammate worktree branches into the lead branch.
+ */
+export const TeamMergeTool = Tool.define("team_merge", {
+  description:
+    "Merge teammate worktree branches into the lead session's current branch using normal git merges. " +
+    "Use this only for teams created in worktree mode. Teammates should usually be ready, shut down, or errored before merging. " +
+    "If a merge conflict happens, the merge is aborted for that teammate and cleanup must wait for manual resolution.",
+  parameters: z.object({
+    name: TeamNameSchema.describe("Team name to merge"),
+    member: MemberNameSchema.optional().describe("Optional single teammate to merge"),
+  }),
+  async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
+    const info = await Team.findBySession(ctx.sessionID)
+    if (!info || info.role !== "lead" || info.team.name !== params.name) {
+      return {
+        title: "Error",
+        output: "Only the lead of this team can merge teammate worktrees.",
+        metadata: {},
+      }
+    }
+
+    try {
+      const result = await Team.merge(params.name, params.member)
+      const lines = [
+        `Merged worktrees for team "${params.name}".`,
+        result.merged.length ? `Merged: ${result.merged.join(", ")}` : "Merged: none",
+        result.skipped.length ? `Skipped: ${result.skipped.join(", ")}` : "Skipped: none",
+        result.pending.length ? `Pending: ${result.pending.join(", ")}` : "Pending: none",
+      ]
+      if (result.conflicts.length) {
+        lines.push(
+          "Conflicts:",
+          ...result.conflicts.map((item) => `- ${item.name}: ${item.files.join(", ") || item.error}`),
+          "Resolve the conflict, then rerun team_merge before team_cleanup.",
+        )
+      }
+      return {
+        title: `Team merged: ${params.name}`,
+        output: lines.join("\n"),
+        metadata: result,
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return {
+        title: "Merge failed",
+        output: `Failed to merge team worktrees: ${msg}`,
+        metadata: {},
+      }
+    }
+  },
+})
+
+/**
  * Clean up the team — remove config and task files.
  */
 export const TeamCleanupTool = Tool.define("team_cleanup", {
   description:
     "Clean up the team by removing all team resources (config, task list). " +
-    "All teammates must be shut down first. Only the lead should call this.",
+    "All teammates must be shut down first. Worktree teams must also run team_merge successfully before cleanup. Only the lead should call this.",
   parameters: z.object({
     name: TeamNameSchema.describe("Team name to clean up"),
     force: z.boolean().optional().describe("Force straggler shutdown before cleanup"),
@@ -1015,6 +1080,7 @@ export const TeamCleanupTool = Tool.define("team_cleanup", {
         output: [
           `Team "${params.name}" has been cleaned up. All resources removed.`,
           "Resume normal non-team chat behavior unless the user asks you to run a team of agents again.",
+          teamInfo.team.worktrees ? "Merged worktree branches remain in the lead branch history." : "",
           wasDelegate ? "Delegate mode restrictions have been removed. You can now use all tools again." : "",
         ]
           .filter(Boolean)
@@ -1180,6 +1246,7 @@ export const TeamTools = [
   TeamApprovePlanTool,
   TeamShutdownAllTool,
   TeamShutdownTool,
+  TeamMergeTool,
   TeamCleanupTool,
   TeamPhaseTool,
   TeamStatusTool,

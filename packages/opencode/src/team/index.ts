@@ -21,6 +21,7 @@ import {
   TeamPhaseLevel,
   TeamScopeSchema,
   TeamErrorKind,
+  MergeStatus,
   MemberPhase,
   TeamInfoSchema,
   TeamMemberSchema,
@@ -36,6 +37,7 @@ import {
   type TeamPhaseLevel as TeamPhaseLevelType,
   type TeamScope as TeamScopeType,
   type TeamErrorKind as TeamErrorKindType,
+  type MergeStatus as MergeStatusType,
   type MemberPhase as MemberPhaseType,
   type PendingSpawnRequest,
   type ExecutionStatus as ExecutionStatusType,
@@ -59,6 +61,7 @@ export {
   TeamPhaseLevel,
   TeamScopeSchema,
   TeamErrorKind,
+  MergeStatus,
   MemberPhase,
   MessagePriority,
   MessageType,
@@ -229,26 +232,6 @@ async function leadDir(leadSessionID: string) {
   return session?.directory ?? Instance.directory
 }
 
-async function removeWorktree(teamName: string, memberName: string) {
-  const team = await Team.get(teamName)
-  const member = team?.members.find((item) => item.name === memberName)
-  if (!team || !member?.worktreePath || !member.worktreeBranch) return
-
-  const { TeamWorktree } = await import("./worktree")
-  await TeamWorktree.remove({
-    repoDir: await leadDir(team.leadSessionID),
-    worktreePath: member.worktreePath,
-    branch: member.worktreeBranch,
-  })
-
-  await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
-    const next = draft.members.find((item) => item.name === memberName)
-    if (!next) return
-    delete next.worktreePath
-    delete next.worktreeBranch
-  }).catch(() => undefined)
-}
-
 async function wake(teamName: string, name: string, sessionID: string) {
   const { SessionPrompt } = await import("../session/prompt")
   const { SessionStatus } = await import("../session/status")
@@ -345,6 +328,13 @@ function normalizeMember(member: TeamMember): TeamMember {
     maxCost: typeof member.maxCost === "number" && Number.isFinite(member.maxCost) ? member.maxCost : undefined,
     worktreePath: typeof member.worktreePath === "string" ? member.worktreePath : undefined,
     worktreeBranch: typeof member.worktreeBranch === "string" ? member.worktreeBranch : undefined,
+    mergeStatus: MergeStatus.safeParse(member.mergeStatus).success
+      ? member.mergeStatus
+      : typeof member.worktreeBranch === "string"
+        ? "pending"
+        : undefined,
+    mergeError: typeof member.mergeError === "string" ? member.mergeError : undefined,
+    mergedAt: typeof member.mergedAt === "number" && Number.isFinite(member.mergedAt) ? member.mergedAt : undefined,
     scope: TeamScopeSchema.safeParse(member.scope).success ? member.scope : undefined,
     mode: TeamMode.safeParse(member.mode).success ? member.mode : "mixed",
     phase: MemberPhase.safeParse(member.phase).success ? member.phase : undefined,
@@ -375,6 +365,7 @@ function normalizeTeam(team: TeamInfo): TeamInfo {
     require_result_before_shutdown:
       typeof team.require_result_before_shutdown === "boolean" ? team.require_result_before_shutdown : false,
     receipts: typeof team.receipts === "boolean" ? team.receipts : false,
+    worktrees: typeof team.worktrees === "boolean" ? team.worktrees : false,
     scope: TeamScopeSchema.safeParse(team.scope).success ? team.scope : undefined,
     team_phase: TeamPhaseLevel.safeParse(team.team_phase).success ? team.team_phase : undefined,
     delivered: typeof team.delivered === "boolean" ? team.delivered : false,
@@ -451,6 +442,13 @@ export namespace Team {
       if (!team) return
       if (team.members.length === 0) return
       if (team.members.some((m) => m.status !== "shutdown")) return
+      if (team.worktrees) {
+        await noticeLead(
+          team.name,
+          `All teammates in "${team.name}" are shut down. This team uses isolated worktrees, so run team_merge and then team_cleanup explicitly.`,
+        )
+        return
+      }
       if (auto.has(autoKey(team.name))) return
 
       const cleanupAt = Date.now() + grace
@@ -543,6 +541,7 @@ export namespace Team {
       maxCost: z.number().nonnegative().optional(),
       require_result_before_shutdown: z.boolean().optional(),
       receipts: z.boolean().optional(),
+      worktrees: z.boolean().optional(),
       output_format: OutputFormat.optional(),
       team_phase: TeamPhaseLevel.optional(),
       delivered: z.boolean().optional(),
@@ -566,6 +565,7 @@ export namespace Team {
         created: Date.now(),
         collect_strict: input.collect_strict ?? false,
         receipts: input.receipts ?? false,
+        worktrees: input.worktrees ?? false,
         output_format: input.output_format ?? "free",
         delivered: input.delivered ?? false,
         ...(typeof input.maxCost === "number" ? { maxCost: input.maxCost } : {}),
@@ -668,7 +668,14 @@ export namespace Team {
         runtime = next.started ? Math.max(0, now - next.started) : 0
         member.status = status
         member.updated = now
-        if (status === "busy") member.assigned_at = now
+        if (status === "busy") {
+          member.assigned_at = now
+          if (next.worktreeBranch) {
+            member.mergeStatus = "pending"
+            delete member.mergeError
+            delete member.mergedAt
+          }
+        }
         if (status !== "error") delete member.error_kind
         changed = true
       })
@@ -677,15 +684,6 @@ export namespace Team {
     }
     if (!changed) return false
     await Bus.publish(TeamEvent.MemberStatusChanged, { teamName, memberName, status })
-    if (status === "shutdown") {
-      await removeWorktree(teamName, memberName).catch((err: unknown) => {
-        log.warn("failed to remove teammate worktree", {
-          teamName,
-          memberName,
-          error: err instanceof Error ? err.message : String(err),
-        })
-      })
-    }
     if (status === "ready") {
       await TeamPolicy.memberIdle({
         teamName,
@@ -848,6 +846,31 @@ export namespace Team {
         } else {
           member.error_kind = errorKind
         }
+        member.updated = Date.now()
+      })
+    } catch {
+      // Team not found — ignore
+    }
+  }
+
+  export async function setMemberMerge(
+    teamName: string,
+    memberName: string,
+    input: {
+      mergeStatus?: MergeStatusType
+      mergeError?: string
+      mergedAt?: number
+    },
+  ): Promise<void> {
+    try {
+      await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+        const member = draft.members.find((item) => item.name === memberName)
+        if (!member) return
+        if (input.mergeStatus) member.mergeStatus = input.mergeStatus
+        if (input.mergeError === undefined) delete member.mergeError
+        else member.mergeError = input.mergeError
+        if (input.mergedAt === undefined) delete member.mergedAt
+        else member.mergedAt = input.mergedAt
         member.updated = Date.now()
       })
     } catch {
@@ -1183,13 +1206,29 @@ export namespace Team {
 
     const scope = TeamScope.withDefaults(TeamScope.merge(team.scope, input.scope))
     const { TeamWorktree } = await import("./worktree")
-    const tree = await TeamWorktree.create({
-      repoDir: Inst.directory,
-      teamName: input.teamName,
-      memberName: input.name,
-      projectID: Inst.project.id,
-    })
-    if (!tree) {
+    const { Project } = await import("../project/project")
+    const tree = team.worktrees
+      ? await TeamWorktree.create({
+          repoDir: Inst.directory,
+          teamName: input.teamName,
+          memberName: input.name,
+          projectID: Inst.project.id,
+        }).then(async (tree) => {
+          if (!tree) return tree
+          try {
+            await Project.addSandbox(Inst.project.id, tree.path)
+            return tree
+          } catch (err) {
+            await TeamWorktree.remove({
+              repoDir: Inst.directory,
+              worktreePath: tree.path,
+              branch: tree.branch,
+            }).catch(() => undefined)
+            throw err
+          }
+        })
+      : null
+    if (team.worktrees && !tree) {
       log.warn("team worktree unavailable, falling back to shared directory", {
         teamName: input.teamName,
         memberName: input.name,
@@ -1237,6 +1276,7 @@ export namespace Team {
       permission: rules,
     }).catch(async (err: unknown) => {
       if (tree) {
+        await Project.removeSandbox(Inst.project.id, tree.path).catch(() => undefined)
         await TeamWorktree.remove({
           repoDir: Inst.directory,
           worktreePath: tree.path,
@@ -1263,6 +1303,7 @@ export namespace Team {
         maxCost: input.maxCost,
         worktreePath: tree?.path,
         worktreeBranch: tree?.branch,
+        mergeStatus: tree?.branch ? "pending" : undefined,
         scope,
         mode: input.mode ?? "mixed",
         result_deadline: input.resultDeadline,
@@ -1275,6 +1316,7 @@ export namespace Team {
         log.warn("failed to clean up orphaned session", { sessionID: session.id })
       }
       if (tree) {
+        await Project.removeSandbox(Inst.project.id, tree.path).catch(() => undefined)
         await TeamWorktree.remove({
           repoDir: Inst.directory,
           worktreePath: tree.path,
@@ -1397,7 +1439,7 @@ export namespace Team {
       "- team_shutdown_all: request shutdown for every active teammate",
       "- team_restart: re-engage an idle or errored teammate",
       "",
-      "You do NOT have access to team_create, team_spawn, team_shutdown, team_cleanup, or team_approve_plan.",
+      "You do NOT have access to team_create, team_spawn, team_shutdown, team_merge, team_cleanup, or team_approve_plan.",
       "Only the team lead can manage the team structure and approve plans.",
       ...skillContext,
       ...planInstructions,
@@ -1461,7 +1503,7 @@ export namespace Team {
         await transitionExecutionStatus(input.teamName, input.name, "timed_out")
         await transitionMemberStatus(input.teamName, input.name, "error", { force: true })
         await setMemberErrorKind(input.teamName, input.name, "timeout")
-        SessionPrompt.cancel(session.id)
+        await SessionPrompt.cancel(session.id)
         await Bus.publish(TeamEvent.MemberTimeout, {
           teamName: input.teamName,
           memberName: input.name,
@@ -1824,6 +1866,29 @@ export namespace Team {
   }
 
   /**
+   * Merge teammate worktree branches into the lead branch.
+   */
+  export async function merge(
+    teamName: string,
+    memberName?: string,
+  ): Promise<{
+    merged: string[]
+    skipped: string[]
+    conflicts: Array<{ name: string; error: string; files: string[] }>
+    pending: string[]
+  }> {
+    const team = await get(teamName)
+    if (!team) throw new Error(`Team "${teamName}" not found`)
+    if (!team.worktrees) throw new Error(`Team "${teamName}" is not using worktrees.`)
+    const { TeamMerge } = await import("./merge")
+    return TeamMerge.merge({
+      team,
+      repoDir: await leadDir(team.leadSessionID),
+      memberName,
+    })
+  }
+
+  /**
    * Clean up a team — removes config and task data.
    * Fails if any members are still active.
    * Publishes TeamEvent.Cleaned so listeners can handle side-effects
@@ -1847,26 +1912,38 @@ export namespace Team {
         )
       }
 
+      const trees = team.members.filter((member) => member.worktreePath && member.worktreeBranch)
+      if (team.worktrees) {
+        const pending = trees.filter((member) => !["merged", "skipped"].includes(member.mergeStatus ?? "pending"))
+        if (pending.length > 0) {
+          throw new Error(
+            `Cannot clean up team "${teamName}": run team_merge first for ${pending.map((member) => member.name).join(", ")}.`,
+          )
+        }
+      }
+
       const { Inbox } = await import("./inbox")
       const { TeamNotepad } = await import("./notepad")
       const { removeEdits } = await import("./files")
       const { TeamWorktree } = await import("./worktree")
+      const { Project } = await import("../project/project")
+      const repoDir = await leadDir(team.leadSessionID)
       await Inbox.removeAll(
         teamName,
         team.members.map((m) => m.name),
       )
       await TeamNotepad.removeAll(teamName)
       removeEdits(teamName)
+      for (const member of trees) {
+        await Project.removeSandbox(Instance.project.id, member.worktreePath!).catch(() => undefined)
+        await TeamWorktree.remove({
+          repoDir,
+          worktreePath: member.worktreePath!,
+          branch: member.worktreeBranch!,
+        })
+      }
       await Storage.remove(configKey(teamName))
       await Storage.remove(tasksKey(teamName))
-      await TeamWorktree.removeAll({
-        repoDir: await leadDir(team.leadSessionID),
-        entries: team.members.flatMap((member) =>
-          member.worktreePath && member.worktreeBranch
-            ? [{ worktreePath: member.worktreePath, branch: member.worktreeBranch }]
-            : [],
-        ),
-      })
       budget.delete(budgetKey(teamName))
       clearWatch(teamName)
 
@@ -1898,7 +1975,7 @@ export namespace Team {
 
     const sid = SessionID.make(member.sessionID)
     for (const _ of [0, 1, 2]) {
-      SessionPrompt.cancel(sid)
+      await SessionPrompt.cancel(sid)
       await transitionExecutionStatus(teamName, memberName, "cancelling")
       await Bun.sleep(120)
       const next = await get(teamName)
@@ -2138,7 +2215,7 @@ export namespace Team {
       if (TERMINAL_EXECUTION_STATES.has(member.execution_status ?? "idle")) continue
       log.info("cancelling member", { teamName, memberName: member.name, sessionID: member.sessionID })
       await transitionExecutionStatus(teamName, member.name, "cancel_requested")
-      SessionPrompt.cancel(SessionID.make(member.sessionID))
+      await SessionPrompt.cancel(SessionID.make(member.sessionID))
       await transitionExecutionStatus(teamName, member.name, "cancelling")
       count++
     }

@@ -137,7 +137,7 @@ describe("team worktree", () => {
     })
   })
 
-  test("spawnMember uses worktree path as session directory when git repo", async () => {
+  test("spawnMember uses worktree path as session directory when worktrees are enabled", async () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
@@ -145,7 +145,7 @@ describe("team worktree", () => {
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
-        await Team.create({ name: "worktree-spawn", leadSessionID: lead.id })
+        await Team.create({ name: "worktree-spawn", leadSessionID: lead.id, worktrees: true })
 
         const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const spawned = await Team.spawnMember({
@@ -166,17 +166,60 @@ describe("team worktree", () => {
         const member = team?.members.find((item) => item.name === "worker")
         expect(member?.worktreePath).toBeTruthy()
         expect(member?.worktreeBranch).toBeTruthy()
+        expect(member?.mergeStatus).toBe("pending")
         expect(session.directory).toBe(member!.worktreePath!)
         expect(session.directory.startsWith(path.join(Global.Path.data, "worktrees", Instance.project.id))).toBe(true)
+        expect(Instance.containsPath(member!.worktreePath!)).toBe(true)
 
         loop.mockRestore()
         await Team.setMemberStatus("worktree-spawn", "worker", "shutdown")
+        expect(await exists(member!.worktreePath!)).toBe(true)
+        await Team.merge("worktree-spawn")
         await Team.cleanup("worktree-spawn")
       },
     })
   })
 
-  test("spawnMember falls back to Inst.directory when not a git repo", async () => {
+  test("spawnMember stays in shared directory when worktrees are disabled", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({})
+        await seed(lead.id)
+        await Team.create({ name: "worktree-disabled", leadSessionID: lead.id, worktrees: false })
+
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
+        const spawned = await Team.spawnMember({
+          teamName: "worktree-disabled",
+          name: "worker",
+          parentSessionID: lead.id,
+          agent: { name: "general" },
+          model: { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" },
+          prompt: "Inspect the repo.",
+          planApproval: false,
+          checkpoint: "none",
+        })
+
+        await Bun.sleep(20)
+
+        const session = await Session.get(SessionID.make(spawned.sessionID))
+        const team = await Team.get("worktree-disabled")
+        const member = team?.members.find((item) => item.name === "worker")
+        expect(session.directory).toBe(tmp.path)
+        expect(member?.worktreePath).toBeUndefined()
+        expect(member?.worktreeBranch).toBeUndefined()
+        expect(member?.mergeStatus).toBeUndefined()
+
+        loop.mockRestore()
+        await Team.setMemberStatus("worktree-disabled", "worker", "shutdown")
+        await Team.cleanup("worktree-disabled")
+      },
+    })
+  })
+
+  test("spawnMember falls back to Inst.directory when worktrees are enabled in a non-git repo", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
@@ -184,7 +227,7 @@ describe("team worktree", () => {
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
-        await Team.create({ name: "worktree-fallback", leadSessionID: lead.id })
+        await Team.create({ name: "worktree-fallback", leadSessionID: lead.id, worktrees: true })
 
         const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const spawned = await Team.spawnMember({
@@ -222,7 +265,7 @@ describe("team worktree", () => {
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
-        await Team.create({ name: "worktree-cleanup", leadSessionID: lead.id })
+        await Team.create({ name: "worktree-cleanup", leadSessionID: lead.id, worktrees: true })
 
         const tree = await TeamWorktree.create({
           repoDir: tmp.path,
@@ -238,6 +281,7 @@ describe("team worktree", () => {
           status: "shutdown",
           worktreePath: tree!.path,
           worktreeBranch: tree!.branch,
+          mergeStatus: "skipped",
         })
 
         await Team.cleanup("worktree-cleanup")
