@@ -296,6 +296,7 @@ export function Prompt(props: PromptProps) {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
+                "x-opencode-session": props.sessionID,
               },
               body: JSON.stringify({ text }),
             })

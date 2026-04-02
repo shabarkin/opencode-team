@@ -1,4 +1,4 @@
-import { Hono } from "hono"
+import { Hono, type Context } from "hono"
 import { stream } from "hono/streaming"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import { SessionID, MessageID, PartID } from "@/session/schema"
@@ -29,6 +29,14 @@ const TeamMessage = z.object({
 const SessionSteer = z.object({
   text: z.string(),
 })
+
+function caller(c: Context) {
+  const raw = c.req.header("x-opencode-session")
+  if (!raw) return
+  const result = SessionID.zod.safeParse(raw)
+  if (!result.success) return
+  return result.data
+}
 
 export const SessionRoutes = lazy(() =>
   new Hono()
@@ -428,6 +436,7 @@ export const SessionRoutes = lazy(() =>
       validator("json", SessionSteer),
       async (c) => {
         const sessionID = c.req.valid("param").sessionID
+        if (caller(c) !== sessionID) return c.json({ error: "Forbidden" }, 403)
         const body = c.req.valid("json")
         await SessionPrompt.steer(sessionID, body.text)
         return c.json(true)

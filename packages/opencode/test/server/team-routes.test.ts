@@ -168,6 +168,39 @@ describe("team routes", () => {
     })
   })
 
+  test("steer route returns conflict for invalid member state", async () => {
+    process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const lead = (await Session.create({})).id
+        const member = (await Session.create({ parentID: lead })).id
+        await Team.create({ name: "steer-conflict", leadSessionID: lead })
+        await Team.addMember("steer-conflict", {
+          name: "worker-a",
+          sessionID: member,
+          agent: "general",
+          status: "shutdown",
+        })
+
+        const app = TeamRoutes()
+        const res = await app.request("/steer-conflict/steer", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": lead,
+          },
+          body: JSON.stringify({ member: "worker-a", text: "retry this" }),
+        })
+
+        expect(res.status).toBe(409)
+        expect(await res.json()).toEqual({ error: 'Teammate "worker-a" cannot be steered from status shutdown.' })
+      },
+    })
+  })
+
   test("mutating routes require the lead session", async () => {
     process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
     await using tmp = await tmpdir()
@@ -230,7 +263,7 @@ describe("team routes", () => {
 
         const pause = spyOn(Team, "pause").mockResolvedValue(undefined)
         const resume = spyOn(Team, "resume").mockResolvedValue(undefined)
-        const steerAll = spyOn(Team, "steerAll").mockResolvedValue(undefined)
+        const steerAll = spyOn(Team, "steerAll").mockResolvedValue({ targets: 1, delivered: 1, errors: [] })
         const app = TeamRoutes()
 
         const denied = await app.request("/pause-team/pause", {
@@ -274,10 +307,50 @@ describe("team routes", () => {
           body: JSON.stringify({ text: "regroup" }),
         })
         expect(broadcast.status).toBe(200)
+        expect(await broadcast.json()).toEqual({ ok: true, targets: 1, delivered: 1, errors: [] })
         expect(steerAll).toHaveBeenCalledWith({ teamName: "pause-team", text: "regroup" })
 
         pause.mockRestore()
         resume.mockRestore()
+        steerAll.mockRestore()
+      },
+    })
+  })
+
+  test("steer-all surfaces partial delivery failures", async () => {
+    process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const lead = (await Session.create({})).id
+        await Team.create({ name: "broadcast-team", leadSessionID: lead })
+
+        const steerAll = spyOn(Team, "steerAll").mockResolvedValue({
+          targets: 2,
+          delivered: 1,
+          errors: [{ target: "worker-a", error: "delivery failed" }],
+        })
+
+        const app = TeamRoutes()
+        const res = await app.request("/broadcast-team/steer-all", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": lead,
+          },
+          body: JSON.stringify({ text: "regroup" }),
+        })
+
+        expect(res.status).toBe(409)
+        expect(await res.json()).toEqual({
+          error: "Failed to steer 1 teammate(s).",
+          targets: 2,
+          delivered: 1,
+          errors: [{ target: "worker-a", error: "delivery failed" }],
+        })
+
         steerAll.mockRestore()
       },
     })

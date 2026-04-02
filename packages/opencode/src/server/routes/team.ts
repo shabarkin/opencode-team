@@ -88,6 +88,32 @@ function sessionTeam(team: Info) {
   }
 }
 
+async function lead(c: Context, name: string): Promise<{ team: Info } | { error: Response }> {
+  const sid = caller(c)
+  if (!sid) return { error: c.json({ error: "Forbidden" }, 403) }
+
+  const match = await Team.findBySession(sid)
+  if (!match || match.role !== "lead" || match.team.name !== name) {
+    return { error: c.json({ error: "Forbidden" }, 403) }
+  }
+
+  const team = await Team.get(name)
+  if (!team) return { error: c.json({ error: "Team not found" }, 404) }
+  return { team }
+}
+
+function teammate(c: Context, team: Info, name: string): { error: Response } | { ok: true } {
+  if (!team.members.some((item) => item.name === name)) {
+    return { error: c.json({ error: "Teammate not found" }, 404) }
+  }
+  return { ok: true }
+}
+
+function invalid(c: Context, err: unknown) {
+  if (!(err instanceof Error) || err.name !== "TeamStateError") throw err
+  return c.json({ error: err.message }, 409)
+}
+
 export const TeamRoutes = lazy(() =>
   new Hono()
     .get(
@@ -242,24 +268,23 @@ export const TeamRoutes = lazy(() =>
       validator("param", z.object({ name: TeamNameSchema })),
       validator("json", TeamSteer),
       async (c) => {
-        const sid = caller(c)
-        if (!sid) return c.json({ error: "Forbidden" }, 403)
-
         const { name } = c.req.valid("param")
         const { member, text } = c.req.valid("json")
-        const match = await Team.findBySession(sid)
-        if (!match || match.role !== "lead" || match.team.name !== name) return c.json({ error: "Forbidden" }, 403)
+        const info = await lead(c, name)
+        if ("error" in info) return info.error
+        const next = teammate(c, info.team, member)
+        if ("error" in next) return next.error
 
-        const team = await Team.get(name)
-        if (!team) return c.json({ error: "Team not found" }, 404)
-        if (!team.members.some((item) => item.name === member)) return c.json({ error: "Teammate not found" }, 404)
-
-        const action = await Team.steer({
-          teamName: name,
-          memberName: member,
-          text,
-        })
-        return c.json({ ok: true as const, action })
+        try {
+          const action = await Team.steer({
+            teamName: name,
+            memberName: member,
+            text,
+          })
+          return c.json({ ok: true as const, action })
+        } catch (err) {
+          return invalid(c, err)
+        }
       },
     )
     .post(
@@ -276,20 +301,19 @@ export const TeamRoutes = lazy(() =>
       validator("param", z.object({ name: TeamNameSchema })),
       validator("json", TeamPause),
       async (c) => {
-        const sid = caller(c)
-        if (!sid) return c.json({ error: "Forbidden" }, 403)
-
         const { name } = c.req.valid("param")
         const { member } = c.req.valid("json")
-        const match = await Team.findBySession(sid)
-        if (!match || match.role !== "lead" || match.team.name !== name) return c.json({ error: "Forbidden" }, 403)
+        const info = await lead(c, name)
+        if ("error" in info) return info.error
+        const next = teammate(c, info.team, member)
+        if ("error" in next) return next.error
 
-        const team = await Team.get(name)
-        if (!team) return c.json({ error: "Team not found" }, 404)
-        if (!team.members.some((item) => item.name === member)) return c.json({ error: "Teammate not found" }, 404)
-
-        await Team.pause({ teamName: name, memberName: member })
-        return c.json({ ok: true as const })
+        try {
+          await Team.pause({ teamName: name, memberName: member })
+          return c.json({ ok: true as const })
+        } catch (err) {
+          return invalid(c, err)
+        }
       },
     )
     .post(
@@ -306,20 +330,19 @@ export const TeamRoutes = lazy(() =>
       validator("param", z.object({ name: TeamNameSchema })),
       validator("json", TeamResume),
       async (c) => {
-        const sid = caller(c)
-        if (!sid) return c.json({ error: "Forbidden" }, 403)
-
         const { name } = c.req.valid("param")
         const { member, redirect } = c.req.valid("json")
-        const match = await Team.findBySession(sid)
-        if (!match || match.role !== "lead" || match.team.name !== name) return c.json({ error: "Forbidden" }, 403)
+        const info = await lead(c, name)
+        if ("error" in info) return info.error
+        const next = teammate(c, info.team, member)
+        if ("error" in next) return next.error
 
-        const team = await Team.get(name)
-        if (!team) return c.json({ error: "Team not found" }, 404)
-        if (!team.members.some((item) => item.name === member)) return c.json({ error: "Teammate not found" }, 404)
-
-        await Team.resume({ teamName: name, memberName: member, redirect })
-        return c.json({ ok: true as const })
+        try {
+          await Team.resume({ teamName: name, memberName: member, redirect })
+          return c.json({ ok: true as const })
+        } catch (err) {
+          return invalid(c, err)
+        }
       },
     )
     .post(
@@ -329,26 +352,45 @@ export const TeamRoutes = lazy(() =>
         description: "Broadcast new instructions to all active teammates.",
         operationId: "team.steerAll",
         responses: {
-          200: { description: "Instructions broadcast" },
+          200: {
+            description: "Instructions broadcast",
+            content: {
+              "application/json": {
+                schema: resolver(
+                  z.object({
+                    ok: z.literal(true),
+                    targets: z.number().int().nonnegative(),
+                    delivered: z.number().int().nonnegative(),
+                    errors: z.array(z.object({ target: MemberNameSchema, error: z.string() })),
+                  }),
+                ),
+              },
+            },
+          },
           ...errors(403, 404),
         },
       }),
       validator("param", z.object({ name: TeamNameSchema })),
       validator("json", TeamSteerAll),
       async (c) => {
-        const sid = caller(c)
-        if (!sid) return c.json({ error: "Forbidden" }, 403)
-
         const { name } = c.req.valid("param")
         const { text } = c.req.valid("json")
-        const match = await Team.findBySession(sid)
-        if (!match || match.role !== "lead" || match.team.name !== name) return c.json({ error: "Forbidden" }, 403)
+        const info = await lead(c, name)
+        if ("error" in info) return info.error
 
-        const team = await Team.get(name)
-        if (!team) return c.json({ error: "Team not found" }, 404)
-
-        await Team.steerAll({ teamName: name, text })
-        return c.json({ ok: true as const })
+        const result = await Team.steerAll({ teamName: name, text })
+        if (result.errors.length > 0) {
+          return c.json(
+            {
+              error: `Failed to steer ${result.errors.length} teammate(s).`,
+              targets: result.targets,
+              delivered: result.delivered,
+              errors: result.errors,
+            },
+            409,
+          )
+        }
+        return c.json({ ok: true as const, ...result })
       },
     )
     .post(

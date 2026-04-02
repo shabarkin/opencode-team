@@ -390,6 +390,12 @@ function checkpointMatch(mode: CheckpointModeType, tool: string) {
   return false
 }
 
+function state(message: string) {
+  const err = new Error(message)
+  err.name = "TeamStateError"
+  return err
+}
+
 function canTransition<T extends string>(current: T, next: T, map: Record<T, T[]>) {
   if (current === next) return true
   return map[current]?.includes(next) === true
@@ -1668,13 +1674,7 @@ export namespace Team {
     const member = team.members.find((m) => m.name === input.memberName)
     if (!member) throw new Error(`Teammate "${input.memberName}" not found`)
     if (member.status !== "ready" && member.status !== "error") {
-      throw new Error(
-        `Teammate "${input.memberName}" is ${member.status} — can only restart ready or errored teammates.`,
-      )
-    }
-
-    if (member.status === "error") {
-      await transitionMemberStatus(input.teamName, input.memberName, "ready", { force: true })
+      throw state(`Teammate "${input.memberName}" is ${member.status} — can only restart ready or errored teammates.`)
     }
 
     await TeamMessaging.send({
@@ -1683,6 +1683,10 @@ export namespace Team {
       to: input.memberName,
       text: input.text,
     })
+
+    if (member.status === "error") {
+      await transitionMemberStatus(input.teamName, input.memberName, "ready", { force: true })
+    }
   }
 
   export async function shutdown(input: {
@@ -1792,6 +1796,10 @@ export namespace Team {
     const member = team.members.find((m) => m.name === input.memberName)
     if (!member) throw new Error(`Teammate "${input.memberName}" not found`)
 
+    if (member.status === "shutdown" || member.status === "shutdown_requested") {
+      throw state(`Teammate "${input.memberName}" cannot be steered from status ${member.status}.`)
+    }
+
     if (member.status === "ready" || member.status === "error") {
       await restart(input)
       return "restart"
@@ -1806,6 +1814,10 @@ export namespace Team {
       return "resume"
     }
 
+    if (member.status !== "busy") {
+      throw state(`Teammate "${input.memberName}" cannot be steered from status ${member.status}.`)
+    }
+
     await TeamMessaging.send({
       teamName: input.teamName,
       from: "lead",
@@ -1817,7 +1829,16 @@ export namespace Team {
 
   export async function steerAll(input: { teamName: string; text: string }) {
     const { TeamMessaging } = await import("./messaging")
-    await TeamMessaging.broadcast({ teamName: input.teamName, from: "lead", text: input.text })
+    const team = await get(input.teamName)
+    if (!team) throw new Error(`Team "${input.teamName}" not found`)
+    return TeamMessaging.broadcast({
+      teamName: input.teamName,
+      from: "lead",
+      text: input.text,
+      targets: team.members
+        .filter((member) => member.status === "ready" || member.status === "busy" || member.status === "error")
+        .map((member) => member.name),
+    })
   }
 
   /**
@@ -2008,12 +2029,22 @@ export namespace Team {
     if (!member) throw new Error(`Teammate "${input.memberName}" not found`)
     if (member.status === "paused") return
     if (member.status === "shutdown" || member.status === "shutdown_requested") {
-      throw new Error(`Teammate "${input.memberName}" cannot be paused from status ${member.status}.`)
+      throw state(`Teammate "${input.memberName}" cannot be paused from status ${member.status}.`)
     }
 
     await transitionMemberStatus(input.teamName, input.memberName, "paused")
     if (member.status === "busy") {
       await interrupt(input.teamName, input.memberName, true)
+    }
+    if (input.reason) {
+      const { TeamMessaging } = await import("./messaging")
+      await TeamMessaging.send({
+        teamName: input.teamName,
+        from: "system",
+        to: input.memberName,
+        text: input.reason,
+        type: "system",
+      }).catch(() => {})
     }
   }
 
@@ -2026,10 +2057,9 @@ export namespace Team {
     const member = team.members.find((m) => m.name === input.memberName)
     if (!member) throw new Error(`Teammate "${input.memberName}" not found`)
     if (member.status !== "paused") {
-      throw new Error(`Teammate "${input.memberName}" is ${member.status} — only paused teammates can be resumed.`)
+      throw state(`Teammate "${input.memberName}" is ${member.status} — only paused teammates can be resumed.`)
     }
 
-    await transitionMemberStatus(input.teamName, input.memberName, "busy")
     await TeamMessaging.recoverInbox(input.teamName, input.memberName, member.sessionID)
     await TeamMessaging.send({
       teamName: input.teamName,
@@ -2037,6 +2067,7 @@ export namespace Team {
       to: input.memberName,
       text: input.redirect ?? "Resume work, review queued team messages, and continue from your latest checkpoint.",
     })
+    await transitionMemberStatus(input.teamName, input.memberName, "busy")
   }
 
   export async function pauseAll(teamName: string, reason?: string) {

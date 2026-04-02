@@ -1,10 +1,9 @@
 import { Log } from "../util/log"
 import { Bus } from "../bus"
-import { Session } from "../session"
+import { MessageV2 } from "../session/message-v2"
 import { SessionPrompt } from "../session/prompt"
 import { SessionStatus } from "../session/status"
 import { SessionID, MessageID, PartID } from "../session/schema"
-import { ProviderID, ModelID } from "../provider/schema"
 import { Team, TeamEvent } from "./index"
 import { Inbox, type InboxMessage } from "./inbox"
 import { TeamPolicy } from "./policy"
@@ -190,7 +189,8 @@ export namespace TeamMessaging {
     type?: MessageType
     priority?: MessagePriority
     threadId?: string
-  }): Promise<void> {
+    targets?: string[]
+  }): Promise<{ targets: number; delivered: number; errors: Array<{ target: string; error: string }> }> {
     validateText(priorityText(input.text, input.priority))
     const team = await Team.get(input.teamName)
     if (!team) throw new Error(`Team "${input.teamName}" not found`)
@@ -198,30 +198,37 @@ export namespace TeamMessaging {
     // Send to all active members except the sender
     const memberTargets = team.members
       .filter((m) => m.name !== input.from && m.status !== "shutdown")
+      .filter((m) => input.targets === undefined || input.targets.includes(m.name))
       .map((m) => ({ name: m.name, sessionID: m.sessionID }))
 
     const targets =
-      input.from !== "lead" && team.leadSessionID
+      input.from !== "lead" && team.leadSessionID && (input.targets === undefined || input.targets.includes("lead"))
         ? [{ name: "lead", sessionID: team.leadSessionID }, ...memberTargets]
         : memberTargets
 
-    const errors: Array<{ target: string; error: string }> = []
     const root = input.threadId ?? messageId()
-    for (const target of targets) {
-      await send({
-        teamName: input.teamName,
-        from: input.from,
-        to: target.name,
-        text: input.text,
-        type: input.type,
-        priority: input.priority,
-        threadId: root,
-      }).catch((err) => {
-        const msg = err instanceof Error ? err.message : String(err)
-        log.warn("broadcast delivery failed", { target: target.name, error: msg })
-        errors.push({ target: target.name, error: msg })
-      })
-    }
+    const errors = (
+      await Promise.all(
+        targets.map(async (target) => {
+          try {
+            await send({
+              teamName: input.teamName,
+              from: input.from,
+              to: target.name,
+              text: input.text,
+              type: input.type,
+              priority: input.priority,
+              threadId: root,
+            })
+            return undefined
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err)
+            log.warn("broadcast delivery failed", { target: target.name, error: msg })
+            return { target: target.name, error: msg }
+          }
+        }),
+      )
+    ).filter((item): item is { target: string; error: string } => !!item)
 
     const delivered = targets.length - errors.length
     log.info("broadcast sent", {
@@ -241,6 +248,7 @@ export namespace TeamMessaging {
       priority: input.priority,
       threadId: root,
     })
+    return { targets: targets.length, delivered, errors }
   }
 
   /**
@@ -334,14 +342,22 @@ export namespace TeamMessaging {
     const pending = await Inbox.unread(teamName, agentName)
     if (pending.length === 0) return 0
 
-    // Find inbox message IDs already present in the session
-    const msgs = await Session.messages({ sessionID: SessionID.make(sessionID) })
     const delivered = new Set<string>()
-    for (const msg of msgs) {
-      for (const part of msg.parts) {
-        const meta = (part as { metadata?: Record<string, unknown> }).metadata
-        if (meta?.inboxMessageId) delivered.add(meta.inboxMessageId as string)
+    const ids = new Set(pending.map((msg) => msg.id))
+    let before: string | undefined
+    while (true) {
+      const page = await MessageV2.page({ sessionID: SessionID.make(sessionID), limit: 50, before })
+      for (const msg of page.items) {
+        for (const part of msg.parts) {
+          const meta = (part as { metadata?: Record<string, unknown> }).metadata
+          const id = typeof meta?.inboxMessageId === "string" ? meta.inboxMessageId : undefined
+          if (!id || !ids.has(id)) continue
+          delivered.add(id)
+        }
       }
+      if (delivered.size === ids.size) break
+      if (!page.more || !page.cursor) break
+      before = page.cursor
     }
 
     let count = 0
@@ -447,36 +463,12 @@ export namespace TeamMessaging {
       | "metadata"
     >,
   ): Promise<void> {
-    // Get the session to find the current agent and model
-    // Don't limit — we need to find the last user message which may not be the most recent
-    const sid = SessionID.make(sessionID)
-    const msgs = await Session.messages({ sessionID: sid })
-    const lastUser = msgs.findLast((m) => m.info.role === "user")
-    if (!lastUser) {
-      throw new Error(`No user message found in session ${sessionID}`)
-    }
-    const userInfo = lastUser.info as { agent: string; model: { providerID: string; modelID: string } }
-
-    const msgId = message.sessionMessageID ? MessageID.make(message.sessionMessageID) : sessionMessageId(message.id)
-    await Session.updateMessage({
-      id: msgId,
-      sessionID: sid,
-      role: "user",
-      agent: userInfo.agent,
-      model: {
-        providerID: ProviderID.make(userInfo.model.providerID),
-        modelID: ModelID.make(userInfo.model.modelID),
-      },
-      time: { created: message.timestamp },
-    })
-
-    await Session.updatePart({
-      id: message.sessionPartID ? PartID.make(message.sessionPartID) : sessionPartId(message.id),
-      messageID: msgId,
-      sessionID: sid,
-      type: "text",
+    await SessionPrompt.inject({
+      sessionID: SessionID.make(sessionID),
       text: `[Team ${message.type ?? "message"} from ${fromName}]: ${message.text}`,
-      synthetic: true,
+      created: message.timestamp,
+      messageID: message.sessionMessageID ?? sessionMessageId(message.id),
+      partID: message.sessionPartID ?? sessionPartId(message.id),
       metadata: {
         teamMessage: TEAM_MESSAGE,
         teamFrom: fromName,

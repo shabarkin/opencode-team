@@ -48,6 +48,7 @@ describe("session team routes", () => {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            "x-opencode-session": session.id,
           },
           body: JSON.stringify({ text: "focus on the failing tests" }),
         })
@@ -55,6 +56,34 @@ describe("session team routes", () => {
         expect(res.status).toBe(200)
         expect(await res.json()).toBe(true)
         expect(steer).toHaveBeenCalledWith(session.id, "focus on the failing tests")
+
+        steer.mockRestore()
+      },
+    })
+  })
+
+  test("steer requires a matching caller session", async () => {
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({})
+        const other = await Session.create({})
+        const steer = spyOn(SessionPrompt, "steer").mockResolvedValue()
+
+        const app = SessionRoutes()
+        const res = await app.request(`/${session.id}/steer`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": other.id,
+          },
+          body: JSON.stringify({ text: "focus on the failing tests" }),
+        })
+
+        expect(res.status).toBe(403)
+        expect(steer).not.toHaveBeenCalled()
 
         steer.mockRestore()
       },

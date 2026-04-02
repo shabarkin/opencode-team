@@ -104,6 +104,62 @@ export namespace SessionPrompt {
     })
   }
 
+  async function latestUser(sessionID: SessionID) {
+    let before: string | undefined
+    while (true) {
+      const page = await MessageV2.page({ sessionID, limit: 50, before })
+      const msg = page.items.findLast((item) => item.info.role === "user")
+      if (msg?.info.role === "user") return msg.info as MessageV2.User
+      if (!page.more || !page.cursor) break
+      before = page.cursor
+    }
+    throw new Error("No user message found in session")
+  }
+
+  function carry(user: MessageV2.User) {
+    return {
+      agent: user.agent,
+      model: user.model,
+      ...(user.format ? { format: user.format } : {}),
+      ...(user.system ? { system: user.system } : {}),
+      ...(user.tools ? { tools: user.tools } : {}),
+      ...(user.variant ? { variant: user.variant } : {}),
+    }
+  }
+
+  export async function inject(input: {
+    sessionID: SessionID
+    text: string
+    created?: number
+    metadata?: Record<string, unknown>
+    messageID?: string
+    partID?: string
+  }) {
+    return withSession(input.sessionID, async () => {
+      const user = await latestUser(input.sessionID)
+      const msg = input.messageID ? MessageID.make(input.messageID) : MessageID.ascending()
+      await Session.updateMessage({
+        id: msg,
+        sessionID: input.sessionID,
+        role: "user",
+        time: {
+          created: input.created ?? Date.now(),
+        },
+        ...carry(user),
+      } satisfies MessageV2.User)
+      await Session.updatePart({
+        id: input.partID ? PartID.make(input.partID) : PartID.ascending(),
+        messageID: msg,
+        sessionID: input.sessionID,
+        type: "text",
+        text: input.text,
+        synthetic: true,
+        ...(input.metadata ? { metadata: input.metadata } : {}),
+      } satisfies MessageV2.TextPart)
+      return msg
+    })
+  }
+
   export const PromptInput = z.object({
     sessionID: SessionID.zod,
     messageID: MessageID.zod.optional(),
@@ -293,34 +349,7 @@ export namespace SessionPrompt {
 
   export async function steer(sessionID: SessionID, text: string) {
     await withSession(sessionID, async () => {
-      const msgs = await Session.messages({ sessionID })
-      const last = msgs.findLast((item) => item.info.role === "user")
-      if (!last) throw new Error("No user message found in session")
-      const user = last.info as MessageV2.User
-
-      const msg = MessageID.ascending()
-      await Session.updateMessage({
-        id: msg,
-        sessionID,
-        role: "user",
-        time: {
-          created: Date.now(),
-        },
-        agent: user.agent,
-        model: user.model,
-        ...(user.format ? { format: user.format } : {}),
-        ...(user.system ? { system: user.system } : {}),
-        ...(user.tools ? { tools: user.tools } : {}),
-        ...(user.variant ? { variant: user.variant } : {}),
-      } satisfies MessageV2.User)
-      await Session.updatePart({
-        id: PartID.ascending(),
-        messageID: msg,
-        sessionID,
-        type: "text",
-        text,
-        synthetic: true,
-      } satisfies MessageV2.TextPart)
+      await inject({ sessionID, text })
 
       const status = await SessionStatus.get(sessionID)
       if (status.type !== "idle") return
@@ -388,6 +417,7 @@ export namespace SessionPrompt {
           !["tool-calls", "unknown"].includes(lastAssistant.finish) &&
           lastUser.id < lastAssistant.id
         ) {
+          if ((await latestUser(sessionID)).id > lastAssistant.id) continue
           log.info("exiting loop", { sessionID })
           break
         }

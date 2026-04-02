@@ -950,6 +950,131 @@ describe("Team steering", () => {
       },
     })
   })
+
+  test("steer resumes paused teammates and leaves errored teammates unchanged on delivery failure", async () => {
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const lead = await Session.create({})
+        const paused = await Session.create({ parentID: lead.id })
+        const errored = await Session.create({ parentID: lead.id })
+        await seed(lead.id)
+        await seed(paused.id)
+        await seed(errored.id)
+
+        await Team.create({ name: "steer-edges", leadSessionID: lead.id })
+        await Team.addMember("steer-edges", {
+          name: "paused-worker",
+          sessionID: paused.id,
+          agent: "general",
+          status: "paused",
+          checkpoint: "none",
+          planApproval: "none",
+        })
+        await Team.addMember("steer-edges", {
+          name: "error-worker",
+          sessionID: errored.id,
+          agent: "general",
+          status: "error",
+          checkpoint: "none",
+          planApproval: "none",
+        })
+
+        const send = spyOn(TeamMessaging, "send")
+          .mockResolvedValueOnce()
+          .mockRejectedValueOnce(new Error("send failed"))
+
+        expect(
+          await Team.steer({
+            teamName: "steer-edges",
+            memberName: "paused-worker",
+            text: "continue from checkpoint",
+          }),
+        ).toBe("resume")
+
+        await expect(
+          Team.steer({
+            teamName: "steer-edges",
+            memberName: "error-worker",
+            text: "retry",
+          }),
+        ).rejects.toThrow("send failed")
+
+        const team = await Team.get("steer-edges")
+        expect(team?.members.find((m) => m.name === "paused-worker")?.status).toBe("busy")
+        expect(team?.members.find((m) => m.name === "error-worker")?.status).toBe("error")
+
+        send.mockRestore()
+        await Team.setMemberStatus("steer-edges", "paused-worker", "shutdown")
+        await Team.setMemberStatus("steer-edges", "error-worker", "shutdown")
+        await Team.cleanup("steer-edges")
+      },
+    })
+  })
+
+  test("steer-all skips paused and shutdown-requested teammates and reports failures", async () => {
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const lead = await Session.create({})
+        const ready = await Session.create({ parentID: lead.id })
+        const paused = await Session.create({ parentID: lead.id })
+        const stopping = await Session.create({ parentID: lead.id })
+        await seed(lead.id)
+        await seed(ready.id)
+        await seed(paused.id)
+        await seed(stopping.id)
+
+        await Team.create({ name: "steer-all-team", leadSessionID: lead.id })
+        await Team.addMember("steer-all-team", {
+          name: "ready-worker",
+          sessionID: ready.id,
+          agent: "general",
+          status: "ready",
+        })
+        await Team.addMember("steer-all-team", {
+          name: "paused-worker",
+          sessionID: paused.id,
+          agent: "general",
+          status: "paused",
+        })
+        await Team.addMember("steer-all-team", {
+          name: "stopping-worker",
+          sessionID: stopping.id,
+          agent: "general",
+          status: "shutdown_requested",
+        })
+
+        const broadcast = spyOn(TeamMessaging, "broadcast").mockResolvedValue({ targets: 1, delivered: 1, errors: [] })
+
+        const result = await Team.steerAll({ teamName: "steer-all-team", text: "regroup" })
+        expect(result).toEqual({ targets: 1, delivered: 1, errors: [] })
+        expect(broadcast).toHaveBeenCalledTimes(1)
+        expect(broadcast).toHaveBeenCalledWith({
+          teamName: "steer-all-team",
+          from: "lead",
+          text: "regroup",
+          targets: ["ready-worker"],
+        })
+
+        broadcast.mockRestore()
+        await Team.setMemberStatus("steer-all-team", "ready-worker", "shutdown")
+        await Team.setMemberStatus("steer-all-team", "paused-worker", "shutdown")
+        await Team.setMemberStatus("steer-all-team", "stopping-worker", "shutdown")
+        await Team.cleanup("steer-all-team")
+      },
+    })
+  })
 })
 
 describe("Team tool definitions", () => {
