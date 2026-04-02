@@ -1,8 +1,9 @@
 import { describe, expect, test, spyOn } from "bun:test"
 import path from "path"
 import { Instance } from "../../src/project/instance"
-import { Team } from "../../src/team"
+import { File } from "../../src/file"
 import { Session } from "../../src/session"
+import { Team } from "../../src/team"
 import { SessionID } from "../../src/session/schema"
 import { Bus } from "../../src/bus"
 import { Env } from "../../src/env"
@@ -32,10 +33,9 @@ describe("team file tracking", () => {
         await Team.addMember("files-b", { name: "b1", sessionID: "ses_b1", agent: "general", status: "busy" })
         await Team.addMember("files-b", { name: "b2", sessionID: "ses_b2", agent: "general", status: "busy" })
 
-        const diff = [{ file: "/tmp/shared.ts", before: "", after: "x", additions: 1, deletions: 0 }]
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_a1"), diff })
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_b1"), diff })
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_a2"), diff })
+        await Bus.publish(File.Event.Edited, { file: "/tmp/shared.ts", sessionID: SessionID.make("ses_a1") })
+        await Bus.publish(File.Event.Edited, { file: "/tmp/shared.ts", sessionID: SessionID.make("ses_b1") })
+        await Bus.publish(File.Event.Edited, { file: "/tmp/shared.ts", sessionID: SessionID.make("ses_a2") })
 
         expect(activeConflicts("files-a")).toEqual([{ file: "/tmp/shared.ts", members: ["a1", "a2"] }])
         expect(activeConflicts("files-b")).toEqual([])
@@ -65,10 +65,9 @@ describe("team file tracking", () => {
         await Team.addMember("files-c", { name: "c1", sessionID: "ses_c1", agent: "general", status: "busy" })
         await Team.addMember("files-c", { name: "c2", sessionID: "ses_c2", agent: "general", status: "busy" })
 
-        const diff = [{ file: "/tmp/shared-c.ts", before: "", after: "x", additions: 1, deletions: 0 }]
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_c1"), diff })
+        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-c.ts", sessionID: SessionID.make("ses_c1") })
         await Team.transitionMemberStatus("files-c", "c1", "shutdown_requested")
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_c2"), diff })
+        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-c.ts", sessionID: SessionID.make("ses_c2") })
 
         const team = await Team.get("files-c")
         expect(activeConflicts("files-c", team!)).toEqual([])
@@ -97,10 +96,9 @@ describe("team file tracking", () => {
         await Team.addMember("files-d", { name: "d1", sessionID: "ses_d1", agent: "general", status: "busy" })
         await Team.addMember("files-d", { name: "d2", sessionID: "ses_d2", agent: "general", status: "busy" })
 
-        const diff = [{ file: "/tmp/shared-d.ts", before: "", after: "x", additions: 1, deletions: 0 }]
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_d1"), diff })
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_d2"), diff })
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_d1"), diff })
+        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-d.ts", sessionID: SessionID.make("ses_d1") })
+        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-d.ts", sessionID: SessionID.make("ses_d2") })
+        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-d.ts", sessionID: SessionID.make("ses_d1") })
 
         const conflicts = activeConflicts("files-d")
         expect(conflicts).toHaveLength(1)
@@ -137,9 +135,8 @@ describe("team file tracking", () => {
         await Team.addMember("files-e", { name: "e1", sessionID: "ses_e1", agent: "general", status: "busy" })
         await Team.addMember("files-e", { name: "e2", sessionID: "ses_e2", agent: "general", status: "busy" })
 
-        const diff = [{ file: "/tmp/shared-e.ts", before: "", after: "x", additions: 1, deletions: 0 }]
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_e1"), diff })
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_e2"), diff })
+        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-e.ts", sessionID: SessionID.make("ses_e1") })
+        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-e.ts", sessionID: SessionID.make("ses_e2") })
 
         expect(pause).toHaveBeenCalledTimes(2)
 
@@ -179,9 +176,8 @@ describe("team file tracking", () => {
           worktreePath: "/tmp/team-files-f2",
         })
 
-        const diff = [{ file: ".ananke/findings.db", before: "", after: "x", additions: 1, deletions: 0 }]
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_f1"), diff })
-        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_f2"), diff })
+        await Bus.publish(File.Event.Edited, { file: ".ananke/findings.db", sessionID: SessionID.make("ses_f1") })
+        await Bus.publish(File.Event.Edited, { file: ".ananke/findings.db", sessionID: SessionID.make("ses_f2") })
 
         const team = await Team.get("files-f")
         expect(activeConflicts("files-f", team!)).toEqual([])
@@ -192,6 +188,36 @@ describe("team file tracking", () => {
         await Team.setMemberStatus("files-f", "f1", "shutdown")
         await Team.setMemberStatus("files-f", "f2", "shutdown")
         await Team.cleanup("files-f")
+      },
+    })
+  })
+
+  test("ignores session diffs without file edit provenance", async () => {
+    await Instance.provide({
+      directory: root,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const stop = initFileTracking()
+        const send = spyOn(TeamMessaging, "send").mockImplementation(async () => {})
+
+        await Team.create({ name: "files-g", leadSessionID: "ses_lead_files_g" })
+        await Team.addMember("files-g", { name: "g1", sessionID: "ses_g1", agent: "general", status: "busy" })
+        await Team.addMember("files-g", { name: "g2", sessionID: "ses_g2", agent: "general", status: "busy" })
+
+        const diff = [{ file: "/tmp/shared-g.ts", before: "", after: "x", additions: 1, deletions: 0 }]
+        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_g1"), diff })
+        await Bus.publish(Session.Event.Diff, { sessionID: SessionID.make("ses_g2"), diff })
+
+        expect(activeConflicts("files-g")).toEqual([])
+        expect(send).not.toHaveBeenCalled()
+
+        send.mockRestore()
+        stop()
+        await Team.setMemberStatus("files-g", "g1", "shutdown")
+        await Team.setMemberStatus("files-g", "g2", "shutdown")
+        await Team.cleanup("files-g")
       },
     })
   })

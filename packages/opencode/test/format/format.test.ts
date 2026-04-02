@@ -7,6 +7,7 @@ import { File } from "../../src/file"
 import { Format } from "../../src/format"
 import * as Formatter from "../../src/format/formatter"
 import { Instance } from "../../src/project/instance"
+import { SessionID } from "../../src/session/schema"
 
 describe("Format", () => {
   afterEach(async () => {
@@ -129,7 +130,7 @@ describe("Format", () => {
     try {
       await withServices(tmp.path, Format.layer, async (rt) => {
         await rt.runPromise(Format.Service.use((s) => s.init()))
-        await Bus.publish(File.Event.Edited, { file })
+        await Bus.publish(File.Event.Edited, { file, sessionID: SessionID.make("ses_format_parallel") })
       })
     } finally {
       Formatter.gofmt.extensions = one.extensions
@@ -164,7 +165,7 @@ describe("Format", () => {
 
     await withServices(tmp.path, Format.layer, async (rt) => {
       await rt.runPromise(Format.Service.use((s) => s.init()))
-      await Bus.publish(File.Event.Edited, { file })
+      await Bus.publish(File.Event.Edited, { file, sessionID: SessionID.make("ses_format_seq") })
     })
 
     expect(await Bun.file(file).text()).toBe("xAB")

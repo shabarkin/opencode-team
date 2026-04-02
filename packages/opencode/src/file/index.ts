@@ -1,6 +1,7 @@
 import { BusEvent } from "@/bus/bus-event"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRunPromise } from "@/effect/run-service"
+import { SessionID } from "@/session/schema"
 import { git } from "@/util/git"
 import { Effect, Fiber, Layer, Scope, ServiceMap } from "effect"
 import { formatPatch, structuredPatch } from "diff"
@@ -79,6 +80,7 @@ export namespace File {
       "file.edited",
       z.object({
         file: z.string(),
+        sessionID: SessionID.zod,
       }),
     ),
   }

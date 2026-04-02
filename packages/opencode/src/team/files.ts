@@ -1,6 +1,6 @@
 import { Log } from "../util/log"
 import { Bus } from "../bus"
-import { Session } from "../session"
+import { File } from "../file"
 import { Team, TeamEvent } from "./index"
 import { TeamMessaging } from "./messaging"
 import { TeamPolicy } from "./policy"
@@ -51,13 +51,13 @@ function recent(list: FileEdit[], now: number) {
 }
 
 /**
- * Subscribe to session.diff events and detect file conflicts.
+ * Subscribe to file.edited events and detect file conflicts.
  * Called during bootstrap when OPENCODE_EXPERIMENTAL_AGENT_TEAMS is enabled.
  */
 export function initFileTracking(): () => void {
-  return Bus.subscribe(Session.Event.Diff, async (event) => {
+  return Bus.subscribe(File.Event.Edited, async (event) => {
     const sessionID = event.properties.sessionID
-    const files = event.properties.diff
+    const file = event.properties.file
 
     // Find which team this session belongs to
     const info = await Team.findBySession(sessionID).catch(() => undefined)
@@ -74,36 +74,34 @@ export function initFileTracking(): () => void {
     const member = team.members.find((item) => item.name === editor)
     if (!member) return
 
-    for (const file of files) {
-      const id = key(teamName, base(member), file.file)
-      const prev = recent(edits.get(id) ?? [], now).filter((edit) => !skip.has(edit.memberName))
-      const members = [...new Set(prev.map((edit) => edit.memberName).filter((name) => name !== editor))]
+    const id = key(teamName, base(member), file)
+    const prev = recent(edits.get(id) ?? [], now).filter((edit) => !skip.has(edit.memberName))
+    const members = [...new Set(prev.map((edit) => edit.memberName).filter((name) => name !== editor))]
 
-      // Check for conflict: different member edited within window
-      if (members.length > 0 && now - (warns.get(id) ?? 0) >= CONFLICT_COOLDOWN) {
-        warns.set(id, now)
-        log.warn("file conflict detected", {
-          teamName,
-          filepath: file.file,
-          editor,
-          previous: members,
-        })
+    // Check for conflict: different member edited within window
+    if (members.length > 0 && now - (warns.get(id) ?? 0) >= CONFLICT_COOLDOWN) {
+      warns.set(id, now)
+      log.warn("file conflict detected", {
+        teamName,
+        filepath: file,
+        editor,
+        previous: members,
+      })
 
-        await Bus.publish(TeamEvent.FileConflict, {
-          teamName,
-          filepath: file.file,
-          members: [...members, editor],
-        })
+      await Bus.publish(TeamEvent.FileConflict, {
+        teamName,
+        filepath: file,
+        members: [...members, editor],
+      })
 
-        const action = await TeamPolicy.conflictDetected({
-          teamName,
-          file: file.file,
-          editors: [...members, editor],
-        })
-        if (action.action === "ignore") continue
-
+      const action = await TeamPolicy.conflictDetected({
+        teamName,
+        file,
+        editors: [...members, editor],
+      })
+      if (action.action !== "ignore") {
         // Notify both teammates and the lead
-        const warning = `[System]: File conflict — ${[...members, editor].join(", ")} edited ${file.file} within ${Math.round(CONFLICT_WINDOW / 60000)} minutes. ${action.action === "block" ? "Work has been paused until the lead resolves the conflict." : "Coordinate to avoid overwriting each other's changes."}`
+        const warning = `[System]: File conflict — ${[...members, editor].join(", ")} edited ${file} within ${Math.round(CONFLICT_WINDOW / 60000)} minutes. ${action.action === "block" ? "Work has been paused until the lead resolves the conflict." : "Coordinate to avoid overwriting each other's changes."}`
 
         if (action.action === "block") {
           for (const name of [...members, editor]) {
@@ -121,13 +119,13 @@ export function initFileTracking(): () => void {
         }
         await TeamMessaging.send({ teamName, from: "system", to: "lead", text: warning }).catch(() => {})
       }
-
-      // Track this edit
-      edits.set(id, [
-        ...prev.filter((edit) => edit.memberName !== editor),
-        { teamName, memberName: editor, sessionID, timestamp: now },
-      ])
     }
+
+    // Track this edit
+    edits.set(id, [
+      ...prev.filter((edit) => edit.memberName !== editor),
+      { teamName, memberName: editor, sessionID, timestamp: now },
+    ])
   })
 }
 
