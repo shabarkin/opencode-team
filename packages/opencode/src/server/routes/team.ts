@@ -6,6 +6,7 @@ import {
   TeamTasks,
   TeamNameSchema,
   MemberNameSchema,
+  PendingSpawnRequestPublicSchema,
   TeamInfoPublicSchema,
   TeamInfoSessionSchema,
   TeamTaskSchema,
@@ -59,21 +60,31 @@ function caller(c: Context) {
   return result.data
 }
 
+function requests(team: Info, full: boolean) {
+  if (full) return team.pending_spawn_requests
+  return (team.pending_spawn_requests ?? []).map((item) => PendingSpawnRequestPublicSchema.parse(item))
+}
+
+function members(team: Info, full: boolean) {
+  return team.members.map((member) => ({
+    name: member.name,
+    ...(full ? { sessionID: member.sessionID } : {}),
+    agent: member.agent,
+    status: member.status,
+    execution_status: member.execution_status,
+    model: member.model,
+    planApproval: member.planApproval,
+    checkpoint: member.checkpoint,
+  }))
+}
+
 function publicTeam(team: Info) {
   return {
     name: team.name,
     created: team.created,
     delegate: team.delegate,
-    members: team.members.map((member) => ({
-      name: member.name,
-      agent: member.agent,
-      status: member.status,
-      execution_status: member.execution_status,
-      model: member.model,
-      planApproval: member.planApproval,
-      checkpoint: member.checkpoint,
-    })),
-    pending_spawn_requests: team.pending_spawn_requests,
+    members: members(team, false),
+    pending_spawn_requests: requests(team, false),
   }
 }
 
@@ -82,22 +93,9 @@ function sessionTeam(team: Info) {
     name: team.name,
     created: team.created,
     delegate: team.delegate,
-    members: team.members.map((member) => ({
-      name: member.name,
-      sessionID: member.sessionID,
-      agent: member.agent,
-      status: member.status,
-      execution_status: member.execution_status,
-      model: member.model,
-      planApproval: member.planApproval,
-      checkpoint: member.checkpoint,
-    })),
-    pending_spawn_requests: team.pending_spawn_requests,
+    members: members(team, true),
+    pending_spawn_requests: requests(team, true),
   }
-}
-
-function memberTeam(team: Info) {
-  return publicTeam(team)
 }
 
 async function lead(c: Context, name: string): Promise<{ team: Info } | { error: Response }> {
@@ -226,7 +224,7 @@ export const TeamRoutes = lazy(() =>
           })
         }
         return c.json({
-          team: memberTeam(result.team),
+          team: publicTeam(result.team),
           tasks,
           role: "member" as const,
           memberName: result.memberName,

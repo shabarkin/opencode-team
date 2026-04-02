@@ -37,6 +37,8 @@ import { useKV } from "../../context/kv"
 import { useTextareaKeybindings } from "../textarea-keybindings"
 import { DialogSkill } from "../dialog-skill"
 
+const ACTIVE = new Set(["starting", "running", "cancel_requested", "cancelling", "completing"])
+
 export type PromptProps = {
   sessionID?: string
   workspaceID?: string
@@ -82,7 +84,7 @@ export function Prompt(props: PromptProps) {
     if (!info || info.role !== "lead") return 0
     return info.members.filter((m) => {
       if (m.status === "shutdown") return false
-      return ["starting", "running", "cancel_requested", "cancelling", "completing"].includes(m.execution_status)
+      return ACTIVE.has(m.execution_status)
     }).length
   })
   const history = usePromptHistory()
@@ -244,11 +246,7 @@ export function Prompt(props: PromptProps) {
           if (status().type === "idle" && teamBusy() > 0) {
             const info = team()
             for (const member of info?.members ?? []) {
-              if (
-                ["starting", "running", "cancel_requested", "cancelling", "completing"].includes(
-                  member.execution_status,
-                )
-              ) {
+              if (ACTIVE.has(member.execution_status)) {
                 if (!member.sessionID) continue
                 sdk.client.session.abort({ sessionID: member.sessionID }).catch(() => {})
               }

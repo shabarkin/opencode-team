@@ -8,6 +8,8 @@ import { useRoute } from "../context/route"
 import { useToast } from "../ui/toast"
 import { useSDK } from "../context/sdk"
 
+type Value = { type: "member"; sessionID?: string } | { type: "task"; id: string } | { type: "request"; id: string }
+
 function statusIcon(status: string): string {
   switch (status) {
     case "busy":
@@ -97,22 +99,22 @@ export function DialogTeam() {
       .catch(() => {})
   })
 
-  const options = createMemo((): DialogSelectOption<string>[] => {
+  const options = createMemo((): DialogSelectOption<Value>[] => {
     const info = teamInfo()
     if (!info) return []
 
-    const memberOptions: DialogSelectOption<string>[] = info.members.map((m) => ({
+    const memberOptions: DialogSelectOption<Value>[] = info.members.map((m) => ({
       title: `${m.name} (@${m.agent})`,
-      value: `member:${m.sessionID ?? m.name}`,
+      value: { type: "member", sessionID: m.sessionID },
       category: "Teammates",
       footer: `Status: ${m.status}`,
       gutter: <text fg={statusColor(m.status, theme)}>{statusIcon(m.status)}</text>,
       disabled: !m.sessionID,
     }))
 
-    const taskOptions: DialogSelectOption<string>[] = (info.tasks ?? []).map((t) => ({
+    const taskOptions: DialogSelectOption<Value>[] = (info.tasks ?? []).map((t) => ({
       title: t.content,
-      value: `task:${t.id}`,
+      value: { type: "task", id: t.id },
       category: "Shared Tasks",
       footer: [
         t.status,
@@ -125,9 +127,9 @@ export function DialogTeam() {
       disabled: t.status === "completed" || t.status === "cancelled",
     }))
 
-    const spawnOptions: DialogSelectOption<string>[] = (info.pendingSpawnRequests ?? []).map((request) => ({
+    const spawnOptions: DialogSelectOption<Value>[] = (info.pendingSpawnRequests ?? []).map((request) => ({
       title: `${request.requested_by} → ${request.agent}${request.name ? ` as ${request.name}` : ""}`,
-      value: `request:${request.id}`,
+      value: { type: "request", id: request.id },
       category: "Pending Spawn Requests",
       footer: request.rationale,
       gutter: <text fg={theme.warning}>?</text>,
@@ -136,11 +138,10 @@ export function DialogTeam() {
     return [...memberOptions, ...taskOptions, ...spawnOptions]
   })
 
-  const handleSelect = (option: DialogSelectOption<string>) => {
-    const [type, id] = option.value.split(":", 2)
-    if (type === "member" && id) {
+  const handleSelect = (option: DialogSelectOption<Value>) => {
+    if (option.value.type === "member" && option.value.sessionID) {
       dialog.clear()
-      nav.navigate({ type: "session", sessionID: id })
+      nav.navigate({ type: "session", sessionID: option.value.sessionID })
     }
   }
 
@@ -169,8 +170,7 @@ export function DialogTeam() {
             keybind: { name: "m", ctrl: false, meta: false, shift: false, leader: false },
             title: "message",
             onTrigger: (option) => {
-              const [type] = option.value.split(":", 2)
-              if (type === "member") {
+              if (option.value.type === "member") {
                 toast.show({ message: "Use team_message tool from the prompt to message teammates", variant: "info" })
               }
             },

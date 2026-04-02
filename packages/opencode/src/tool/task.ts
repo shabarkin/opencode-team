@@ -14,6 +14,7 @@ import { Permission } from "@/permission"
 import { Team } from "../team"
 import { TEAM_TOOL_IDS } from "./team-ids"
 import { Log } from "@/util/log"
+import { childPermission } from "./child-permission"
 
 const log = Log.create({ service: "tool.task" })
 
@@ -49,7 +50,10 @@ export const TaskTool = Tool.define("task", async (ctx) => {
   return {
     description,
     parameters,
-    async execute(params: z.infer<typeof parameters>, ctx) {
+    async execute(
+      params: z.infer<typeof parameters>,
+      ctx,
+    ): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
       const config = await Config.get()
 
       // Skip permission check when user explicitly invoked via @ or command subtask
@@ -81,70 +85,28 @@ export const TaskTool = Tool.define("task", async (ctx) => {
       const allowPad = info?.role === "member" && !!info.memberName
       const tools = TEAM_TOOL_IDS.filter((id) => !allowPad || id !== "team_notepad")
       const parent = await Session.get(ctx.sessionID)
-      const permission = [
-        {
-          permission: "todowrite",
-          pattern: "*",
-          action: "deny" as const,
-        },
-        {
-          permission: "todoread",
-          pattern: "*",
-          action: "deny" as const,
-        },
-        ...tools.map((t) => ({
-          permission: t,
-          pattern: "*",
-          action: "deny" as const,
-        })),
-        ...(allowPad
-          ? [
-              {
-                permission: "team_notepad",
-                pattern: "read",
-                action: "allow" as const,
-              },
-              {
-                permission: "team_notepad",
-                pattern: "list",
-                action: "allow" as const,
-              },
-              {
-                permission: "team_notepad",
-                pattern: "write",
-                action: "deny" as const,
-              },
-              {
-                permission: "team_notepad",
-                pattern: "delete",
-                action: "deny" as const,
-              },
-            ]
-          : []),
-        ...(hasTaskPermission
-          ? []
-          : [
-              {
-                permission: "task" as const,
-                pattern: "*" as const,
-                action: "deny" as const,
-              },
-            ]),
-        ...(config.experimental?.primary_tools?.map((t) => ({
-          pattern: "*",
-          action: "allow" as const,
-          permission: t,
-        })) ?? []),
-        ...(parent.permission ?? []).filter((rule) => rule.action === "deny"),
-      ]
+      const permission = childPermission({
+        tools,
+        pad: allowPad,
+        task: hasTaskPermission,
+        primary: config.experimental?.primary_tools,
+        parent: parent.permission,
+      })
+      let resumed = params.task_id
+        ? await Session.get(SessionID.make(params.task_id)).catch(() => undefined)
+        : undefined
+      if (resumed && resumed.parentID !== ctx.sessionID) {
+        return {
+          title: "Error",
+          output: `task_id \"${params.task_id}\" does not belong to this session.`,
+          metadata: {},
+        }
+      }
 
       const session = await iife(async () => {
-        if (params.task_id) {
-          const found = await Session.get(SessionID.make(params.task_id)).catch(() => {})
-          if (found) {
-            await Session.setPermission({ sessionID: found.id, permission })
-            return await Session.get(found.id)
-          }
+        if (resumed) {
+          await Session.setPermission({ sessionID: resumed.id, permission })
+          return resumed
         }
 
         return await Session.create({

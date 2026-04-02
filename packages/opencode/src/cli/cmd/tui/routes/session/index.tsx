@@ -167,9 +167,11 @@ export function Session() {
   const teamMembers = createMemo(() => {
     const info = teamInfo()
     if (!info?.members?.length) return []
-    return info.members.flatMap((m) =>
-      !m.sessionID || m.status === "shutdown" ? [] : [{ ...m, sessionID: m.sessionID }],
-    )
+    return info.members.reduce<Array<(typeof info.members)[number] & { sessionID: string }>>((acc, m) => {
+      if (!m.sessionID || m.status === "shutdown") return acc
+      acc.push(m as (typeof info.members)[number] & { sessionID: string })
+      return acc
+    }, [])
   })
 
   const wide = createMemo(() => dimensions().width > 120)

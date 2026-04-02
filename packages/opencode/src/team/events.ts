@@ -135,6 +135,7 @@ export const PendingSpawnRequestSchema = z.object({
   created: z.number(),
 })
 export type PendingSpawnRequest = z.infer<typeof PendingSpawnRequestSchema>
+export const PendingSpawnRequestPublicSchema = PendingSpawnRequestSchema.omit({ rationale: true, prompt: true })
 
 export const TeamInfoSchema = z.object({
   name: SafeName,
@@ -163,6 +164,7 @@ export const TeamMemberPublicSchema = TeamMemberSchema.omit({
 })
 export const TeamInfoPublicSchema = TeamInfoSchema.omit({ leadSessionID: true, members: true }).extend({
   members: z.array(TeamMemberPublicSchema),
+  pending_spawn_requests: z.array(PendingSpawnRequestPublicSchema).optional(),
 })
 
 export const TeamMemberSessionSchema = TeamMemberSchema.omit({ prompt: true, updated: true, started: true })

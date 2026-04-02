@@ -161,6 +161,48 @@ describe("task subagent team tool isolation", () => {
     })
   })
 
+  test("task_id reuse rejects foreign parent sessions", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const first = await Session.create({})
+        const second = await Session.create({})
+        const firstSeed = await seed(first.id)
+        const secondSeed = await seed(second.id)
+        const firstMsg = await assist(first.id, firstSeed)
+        const secondMsg = await assist(second.id, secondSeed)
+
+        const prompt = spyOn(SessionPrompt, "prompt").mockImplementation((async () => {
+          return { parts: [{ type: "text", text: "done" }] } as any
+        }) as any)
+
+        const tool = await TaskTool.init()
+        const task = await tool.execute(
+          { description: "plain task", prompt: "Inspect the repo", subagent_type: "explore" },
+          ctx(first.id, firstMsg, await Session.messages({ sessionID: first.id })),
+        )
+
+        const reused = await tool.execute(
+          {
+            description: "plain task",
+            prompt: "Inspect the repo",
+            subagent_type: "explore",
+            task_id: task.metadata.sessionId,
+          },
+          ctx(second.id, secondMsg, await Session.messages({ sessionID: second.id })),
+        )
+
+        expect(reused.title).toBe("Error")
+        expect(reused.output).toContain("does not belong to this session")
+        expect(prompt).toHaveBeenCalledTimes(1)
+
+        prompt.mockRestore()
+      },
+    })
+  })
+
   test("team member task children get read-only team_notepad access", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({

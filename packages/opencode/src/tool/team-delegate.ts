@@ -13,6 +13,7 @@ import { TeamNotepad } from "../team/notepad"
 import { defer } from "@/util/defer"
 import { iife } from "@/util/iife"
 import { Log } from "@/util/log"
+import { childPermission } from "./child-permission"
 
 const log = Log.create({ service: "tool.team-delegate" })
 
@@ -61,38 +62,12 @@ export const TeamDelegateTool = Tool.define("team_delegate", async () => {
       const hasTask = agent.permission.some((rule) => rule.permission === "task")
       const note = await TeamNotepad.context(info.team.name).catch(() => "")
       const parent = await Session.get(ctx.sessionID)
-      const permission = [
-        {
-          permission: "todowrite",
-          pattern: "*",
-          action: "deny" as const,
-        },
-        {
-          permission: "todoread",
-          pattern: "*",
-          action: "deny" as const,
-        },
-        ...TEAM_TOOL_IDS.map((tool) => ({
-          permission: tool,
-          pattern: "*",
-          action: "deny" as const,
-        })),
-        ...(hasTask
-          ? []
-          : [
-              {
-                permission: "task" as const,
-                pattern: "*" as const,
-                action: "deny" as const,
-              },
-            ]),
-        ...(config.experimental?.primary_tools?.map((tool) => ({
-          pattern: "*",
-          action: "allow" as const,
-          permission: tool,
-        })) ?? []),
-        ...(parent.permission ?? []).filter((rule) => rule.action === "deny"),
-      ]
+      const permission = childPermission({
+        tools: TEAM_TOOL_IDS,
+        task: hasTask,
+        primary: config.experimental?.primary_tools,
+        parent: parent.permission,
+      })
       const session = await iife(async () => {
         return Session.create({
           parentID: ctx.sessionID,

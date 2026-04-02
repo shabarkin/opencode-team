@@ -27,6 +27,7 @@ import {
   TeamMemberSchema,
   TeamTaskSchema,
   PendingSpawnRequestSchema,
+  PendingSpawnRequestPublicSchema,
   type TeamInfo,
   type TeamMember,
   type TeamTask,
@@ -72,6 +73,7 @@ export {
   TeamInfoSessionSchema,
   TeamTaskSchema,
   PendingSpawnRequestSchema,
+  PendingSpawnRequestPublicSchema,
   type TeamInfo,
   type TeamMember,
   type TeamTask,
@@ -1962,14 +1964,17 @@ export namespace Team {
         )
       }
 
-      const running: string[] = []
-      for (const member of team.members) {
-        if (await stopped(member.sessionID)) continue
-        running.push(member.name)
+      const running: typeof team.members = []
+      const state = await Promise.all(team.members.map((member) => stopped(member.sessionID)))
+      for (const [idx, ok] of state.entries()) {
+        if (ok) continue
+        const member = team.members[idx]
+        if (member) running.push(member)
       }
-      if (running.length > 0) {
+      const active = running.map((member) => member.name)
+      if (active.length > 0) {
         throw new Error(
-          `Cannot clean up team "${teamName}": ${running.join(", ")} still have active session loops. Wait for prompt shutdown acknowledgement first.`,
+          `Cannot clean up team "${teamName}": ${active.join(", ")} still have active session loops. Wait for prompt shutdown acknowledgement first.`,
         )
       }
 

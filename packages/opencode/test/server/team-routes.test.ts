@@ -56,6 +56,14 @@ describe("team routes", () => {
           status: "busy",
           prompt: "secret prompt",
         })
+        await Team.requestSpawn({
+          teamName: "route-team",
+          requestedBy: "worker-a",
+          agent: "explore",
+          rationale: "check secret area",
+          prompt: "inspect hidden files",
+          messages: [],
+        })
 
         const app = TeamRoutes()
         const denied = await app.request("/route-team")
@@ -72,6 +80,8 @@ describe("team routes", () => {
         expect(body.name).toBe("route-team")
         expect(body.members[0].prompt).toBeUndefined()
         expect(body.members[0].sessionID).toBeUndefined()
+        expect(body.pending_spawn_requests[0].rationale).toBeUndefined()
+        expect(body.pending_spawn_requests[0].prompt).toBeUndefined()
       },
     })
   })
@@ -101,6 +111,14 @@ describe("team routes", () => {
           status: "ready",
           prompt: "peer secret",
         })
+        await Team.requestSpawn({
+          teamName: "session-team",
+          requestedBy: "worker-a",
+          agent: "explore",
+          rationale: "check secret area",
+          prompt: "inspect hidden files",
+          messages: [],
+        })
 
         const app = TeamRoutes()
         const denied = await app.request(`/by-session/${member}`, {
@@ -123,6 +141,8 @@ describe("team routes", () => {
         expect(body.team.members[0].prompt).toBeUndefined()
         expect(body.team.members[0].sessionID).toBeUndefined()
         expect(body.team.members[1].sessionID).toBeUndefined()
+        expect(body.team.pending_spawn_requests[0].rationale).toBeUndefined()
+        expect(body.team.pending_spawn_requests[0].prompt).toBeUndefined()
 
         const leadView = await app.request(`/by-session/${lead}`, {
           headers: {
@@ -136,6 +156,8 @@ describe("team routes", () => {
         expect(leadBody.role).toBe("lead")
         expect(leadBody.team.members[0].sessionID).toBe(member)
         expect(leadBody.team.members[1].sessionID).toBe(peer)
+        expect(leadBody.team.pending_spawn_requests[0].rationale).toBe("check secret area")
+        expect(leadBody.team.pending_spawn_requests[0].prompt).toBe("inspect hidden files")
       },
     })
   })

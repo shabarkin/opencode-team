@@ -106,7 +106,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
             id: string
             requested_by: string
             agent: string
-            rationale: string
+            rationale?: string
             name?: string
             prompt?: string
             created: number
