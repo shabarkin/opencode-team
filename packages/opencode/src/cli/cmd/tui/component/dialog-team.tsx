@@ -103,10 +103,11 @@ export function DialogTeam() {
 
     const memberOptions: DialogSelectOption<string>[] = info.members.map((m) => ({
       title: `${m.name} (@${m.agent})`,
-      value: `member:${m.sessionID}`,
+      value: `member:${m.sessionID ?? m.name}`,
       category: "Teammates",
       footer: `Status: ${m.status}`,
       gutter: <text fg={statusColor(m.status, theme)}>{statusIcon(m.status)}</text>,
+      disabled: !m.sessionID,
     }))
 
     const taskOptions: DialogSelectOption<string>[] = (info.tasks ?? []).map((t) => ({
@@ -179,7 +180,7 @@ export function DialogTeam() {
             title: "go to lead",
             onTrigger: () => {
               const info = teamInfo()
-              if (!info) return
+              if (!info?.leadSessionID) return
               dialog.clear()
               nav.navigate({ type: "session", sessionID: info.leadSessionID })
             },

@@ -80,11 +80,71 @@ export const TaskTool = Tool.define("task", async (ctx) => {
             )
       const allowPad = info?.role === "member" && !!info.memberName
       const tools = TEAM_TOOL_IDS.filter((id) => !allowPad || id !== "team_notepad")
+      const parent = await Session.get(ctx.sessionID)
+      const permission = [
+        {
+          permission: "todowrite",
+          pattern: "*",
+          action: "deny" as const,
+        },
+        {
+          permission: "todoread",
+          pattern: "*",
+          action: "deny" as const,
+        },
+        ...tools.map((t) => ({
+          permission: t,
+          pattern: "*",
+          action: "deny" as const,
+        })),
+        ...(allowPad
+          ? [
+              {
+                permission: "team_notepad",
+                pattern: "read",
+                action: "allow" as const,
+              },
+              {
+                permission: "team_notepad",
+                pattern: "list",
+                action: "allow" as const,
+              },
+              {
+                permission: "team_notepad",
+                pattern: "write",
+                action: "deny" as const,
+              },
+              {
+                permission: "team_notepad",
+                pattern: "delete",
+                action: "deny" as const,
+              },
+            ]
+          : []),
+        ...(hasTaskPermission
+          ? []
+          : [
+              {
+                permission: "task" as const,
+                pattern: "*" as const,
+                action: "deny" as const,
+              },
+            ]),
+        ...(config.experimental?.primary_tools?.map((t) => ({
+          pattern: "*",
+          action: "allow" as const,
+          permission: t,
+        })) ?? []),
+        ...(parent.permission ?? []).filter((rule) => rule.action === "deny"),
+      ]
 
       const session = await iife(async () => {
         if (params.task_id) {
           const found = await Session.get(SessionID.make(params.task_id)).catch(() => {})
-          if (found) return found
+          if (found) {
+            await Session.setPermission({ sessionID: found.id, permission })
+            return await Session.get(found.id)
+          }
         }
 
         return await Session.create({
@@ -93,61 +153,7 @@ export const TaskTool = Tool.define("task", async (ctx) => {
             params.description +
             ` (@${agent.name} subagent)` +
             (linked ? ` [${linked.parentTeam}/${linked.parentMember}]` : ""),
-          permission: [
-            {
-              permission: "todowrite",
-              pattern: "*",
-              action: "deny",
-            },
-            {
-              permission: "todoread",
-              pattern: "*",
-              action: "deny",
-            },
-            ...tools.map((t) => ({
-              permission: t,
-              pattern: "*",
-              action: "deny" as const,
-            })),
-            ...(allowPad
-              ? [
-                  {
-                    permission: "team_notepad",
-                    pattern: "read",
-                    action: "allow" as const,
-                  },
-                  {
-                    permission: "team_notepad",
-                    pattern: "list",
-                    action: "allow" as const,
-                  },
-                  {
-                    permission: "team_notepad",
-                    pattern: "write",
-                    action: "deny" as const,
-                  },
-                  {
-                    permission: "team_notepad",
-                    pattern: "delete",
-                    action: "deny" as const,
-                  },
-                ]
-              : []),
-            ...(hasTaskPermission
-              ? []
-              : [
-                  {
-                    permission: "task" as const,
-                    pattern: "*" as const,
-                    action: "deny" as const,
-                  },
-                ]),
-            ...(config.experimental?.primary_tools?.map((t) => ({
-              pattern: "*",
-              action: "allow" as const,
-              permission: t,
-            })) ?? []),
-          ],
+          permission,
         })
       })
       if (linked) {

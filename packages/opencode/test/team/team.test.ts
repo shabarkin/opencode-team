@@ -316,6 +316,33 @@ describe("Team", () => {
     })
   })
 
+  test("cleanup waits for prompt shutdown acknowledgement", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        await Team.create({ name: "active-loop-team", leadSessionID: "ses_lead_loop" })
+        await Team.addMember("active-loop-team", {
+          name: "worker",
+          sessionID: "ses_loop_worker",
+          agent: "general",
+          status: "shutdown",
+        })
+
+        const status = spyOn(SessionStatus, "get")
+          .mockResolvedValueOnce({ type: "busy" } as any)
+          .mockResolvedValueOnce({ type: "idle" } as any)
+
+        await expect(Team.cleanup("active-loop-team")).rejects.toThrow("active session loops")
+        await Team.cleanup("active-loop-team")
+
+        status.mockRestore()
+      },
+    })
+  })
+
   test("findBySession finds lead and member roles", async () => {
     await Instance.provide({
       directory: projectRoot,
@@ -1322,6 +1349,70 @@ describe("Team tool definitions", () => {
     })
   })
 
+  test("pause leaves busy members running when cancellation never settles", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        await Team.create({ name: "pause-stuck-team", leadSessionID: "ses_pause_lead" })
+        await Team.addMember("pause-stuck-team", {
+          name: "worker",
+          sessionID: "ses_pause_worker",
+          agent: "general",
+          status: "busy",
+          execution_status: "running",
+        })
+
+        const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue()
+        const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "busy" } as any)
+
+        await expect(Team.pause({ teamName: "pause-stuck-team", memberName: "worker" })).rejects.toThrow(
+          'Teammate "worker" did not stop after pause was requested.',
+        )
+        expect((await Team.get("pause-stuck-team"))?.members.find((member) => member.name === "worker")?.status).toBe(
+          "busy",
+        )
+
+        cancel.mockRestore()
+        status.mockRestore()
+      },
+    })
+  })
+
+  test("forceShutdownAll leaves stuck members pending until their loops stop", async () => {
+    await Instance.provide({
+      directory: projectRoot,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        await Team.create({ name: "force-stuck-team", leadSessionID: "ses_force_lead" })
+        await Team.addMember("force-stuck-team", {
+          name: "worker",
+          sessionID: "ses_force_worker",
+          agent: "general",
+          status: "busy",
+          execution_status: "running",
+        })
+
+        const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue()
+        const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "busy" } as any)
+
+        const result = await Team.forceShutdownAll("force-stuck-team", "emergency")
+        expect(result.pending).toEqual(["worker"])
+        expect(result.shutdown).toEqual([])
+        expect((await Team.get("force-stuck-team"))?.members.find((member) => member.name === "worker")?.status).toBe(
+          "shutdown_requested",
+        )
+
+        cancel.mockRestore()
+        status.mockRestore()
+      },
+    })
+  })
+
   test("TeamShutdownTool force shuts down stuck members after timeout", async () => {
     await Instance.provide({
       directory: projectRoot,
@@ -1361,7 +1452,7 @@ describe("Team tool definitions", () => {
         expect(wait).toHaveLength(1)
         await wait[0]!()
 
-        expect(cancel).toHaveBeenCalledWith("ses_worker_z")
+        expect(cancel).not.toHaveBeenCalled()
         expect((await Team.get("shutdown-timeout-team"))?.members.find((m) => m.name === "worker-z")?.status).toBe(
           "shutdown",
         )

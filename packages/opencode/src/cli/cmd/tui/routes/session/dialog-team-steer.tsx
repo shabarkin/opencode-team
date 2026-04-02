@@ -18,11 +18,9 @@ export function DialogTeamSteer(props: { sessionID: string }) {
   const options = createMemo((): DialogSelectOption<{ action: Action; member?: string }>[] => {
     const info = team()
     if (!info) return []
+    if (info.role !== "lead") return []
 
-    const members =
-      info.role === "member" && info.memberName
-        ? info.members.filter((member) => member.name === info.memberName)
-        : info.members
+    const members = info.members
 
     const actions = members.flatMap((member) => [
       {
@@ -68,13 +66,13 @@ export function DialogTeamSteer(props: { sessionID: string }) {
 
   async function request(path: string, body: Record<string, unknown>, success: string) {
     const info = team()
-    if (!info) return
+    if (!info || info.role !== "lead") return
 
     const res = await sdk.fetch(`${sdk.url}/team/${info.teamName}/${path}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-opencode-session": info.leadSessionID,
+        "x-opencode-session": props.sessionID,
       },
       body: JSON.stringify(body),
     })
@@ -96,7 +94,7 @@ export function DialogTeamSteer(props: { sessionID: string }) {
 
   return (
     <DialogSelect
-      title={team()?.role === "lead" ? "Steer team" : `Steer @${team()?.memberName ?? "member"}`}
+      title="Steer team"
       placeholder="Search teammate or action"
       options={options()}
       onSelect={async (option) => {

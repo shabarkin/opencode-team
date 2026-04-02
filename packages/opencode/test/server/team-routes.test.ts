@@ -76,7 +76,7 @@ describe("team routes", () => {
     })
   })
 
-  test("by-session route requires matching caller and hides prompts", async () => {
+  test("by-session route requires matching caller and redacts session ids for members", async () => {
     process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
     await using tmp = await tmpdir()
 
@@ -85,6 +85,7 @@ describe("team routes", () => {
       fn: async () => {
         const lead = (await Session.create({})).id
         const member = (await Session.create({ parentID: lead })).id
+        const peer = (await Session.create({ parentID: lead })).id
         await Team.create({ name: "session-team", leadSessionID: lead })
         await Team.addMember("session-team", {
           name: "worker-a",
@@ -92,6 +93,13 @@ describe("team routes", () => {
           agent: "general",
           status: "busy",
           prompt: "secret prompt",
+        })
+        await Team.addMember("session-team", {
+          name: "worker-b",
+          sessionID: peer,
+          agent: "general",
+          status: "ready",
+          prompt: "peer secret",
         })
 
         const app = TeamRoutes()
@@ -110,9 +118,24 @@ describe("team routes", () => {
 
         expect(ok.status).toBe(200)
         const body = await ok.json()
-        expect(body.leadSessionID).toBe(lead)
+        expect(body.leadSessionID).toBeUndefined()
+        expect(body.role).toBe("member")
         expect(body.team.members[0].prompt).toBeUndefined()
-        expect(body.team.members[0].sessionID).toBe(member)
+        expect(body.team.members[0].sessionID).toBeUndefined()
+        expect(body.team.members[1].sessionID).toBeUndefined()
+
+        const leadView = await app.request(`/by-session/${lead}`, {
+          headers: {
+            "x-opencode-session": lead,
+          },
+        })
+
+        expect(leadView.status).toBe(200)
+        const leadBody = await leadView.json()
+        expect(leadBody.leadSessionID).toBe(lead)
+        expect(leadBody.role).toBe("lead")
+        expect(leadBody.team.members[0].sessionID).toBe(member)
+        expect(leadBody.team.members[1].sessionID).toBe(peer)
       },
     })
   })

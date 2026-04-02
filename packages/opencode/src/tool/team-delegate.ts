@@ -60,41 +60,44 @@ export const TeamDelegateTool = Tool.define("team_delegate", async () => {
       const config = await Config.get()
       const hasTask = agent.permission.some((rule) => rule.permission === "task")
       const note = await TeamNotepad.context(info.team.name).catch(() => "")
+      const parent = await Session.get(ctx.sessionID)
+      const permission = [
+        {
+          permission: "todowrite",
+          pattern: "*",
+          action: "deny" as const,
+        },
+        {
+          permission: "todoread",
+          pattern: "*",
+          action: "deny" as const,
+        },
+        ...TEAM_TOOL_IDS.map((tool) => ({
+          permission: tool,
+          pattern: "*",
+          action: "deny" as const,
+        })),
+        ...(hasTask
+          ? []
+          : [
+              {
+                permission: "task" as const,
+                pattern: "*" as const,
+                action: "deny" as const,
+              },
+            ]),
+        ...(config.experimental?.primary_tools?.map((tool) => ({
+          pattern: "*",
+          action: "allow" as const,
+          permission: tool,
+        })) ?? []),
+        ...(parent.permission ?? []).filter((rule) => rule.action === "deny"),
+      ]
       const session = await iife(async () => {
         return Session.create({
           parentID: ctx.sessionID,
           title: `${params.description} (@${agent.name} delegate) [${info.team.name}/${info.memberName}]`,
-          permission: [
-            {
-              permission: "todowrite",
-              pattern: "*",
-              action: "deny",
-            },
-            {
-              permission: "todoread",
-              pattern: "*",
-              action: "deny",
-            },
-            ...TEAM_TOOL_IDS.map((tool) => ({
-              permission: tool,
-              pattern: "*",
-              action: "deny" as const,
-            })),
-            ...(hasTask
-              ? []
-              : [
-                  {
-                    permission: "task" as const,
-                    pattern: "*" as const,
-                    action: "deny" as const,
-                  },
-                ]),
-            ...(config.experimental?.primary_tools?.map((tool) => ({
-              pattern: "*",
-              action: "allow" as const,
-              permission: tool,
-            })) ?? []),
-          ],
+          permission,
         })
       })
       await Team.setTrace(session.id, {

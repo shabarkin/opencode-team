@@ -77,11 +77,13 @@ describe("team mode", () => {
         expect(member?.result_deadline).toBe(5)
 
         const session = await Session.get(SessionID.make(out.sessionID))
-        for (const tool of WRITE_TOOLS) {
+        for (const tool of [...WRITE_TOOLS, "task", "team_delegate"] as const) {
           expect(session.permission).toContainEqual({ permission: tool, pattern: "*:research-mode", action: "deny" })
         }
         expect(Permission.evaluate("edit", "src/index.ts", session.permission ?? []).action).toBe("deny")
         expect(Permission.evaluate("bash", "git status", session.permission ?? []).action).toBe("deny")
+        expect(Permission.evaluate("task", "explore", session.permission ?? []).action).toBe("deny")
+        expect(Permission.evaluate("team_delegate", "*", session.permission ?? []).action).toBe("deny")
 
         loop.mockRestore()
         await finish("research-mode")

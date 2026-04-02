@@ -6,6 +6,7 @@ import { ModelID, ProviderID } from "../../src/provider/schema"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Session } from "../../src/session"
 import { SessionPrompt } from "../../src/session/prompt"
+import { Permission } from "../../src/permission"
 import { Team } from "../../src/team"
 import { TEAM_TOOL_IDS } from "../../src/tool/team"
 import { TeamCollectTool } from "../../src/tool/team-collect"
@@ -211,6 +212,108 @@ describe("task subagent team tool isolation", () => {
         prompt.mockRestore()
         await Team.setMemberStatus("task-team", "worker", "shutdown")
         await Team.cleanup("task-team")
+      },
+    })
+  })
+
+  test("restricted team task children inherit parent deny rules", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({})
+        const member = await Session.create({ parentID: lead.id })
+        await seed(lead.id)
+        const memberSeed = await seed(member.id)
+        const memberMsg = await assist(member.id, memberSeed)
+
+        await Session.setPermission({
+          sessionID: member.id,
+          permission: [
+            { permission: "edit", pattern: "*:plan-approval", action: "deny" },
+            { permission: "bash", pattern: "*:plan-approval", action: "deny" },
+          ],
+        })
+
+        await Team.create({ name: "task-lock-team", leadSessionID: lead.id })
+        await Team.addMember("task-lock-team", {
+          name: "worker",
+          sessionID: member.id,
+          agent: "general",
+          status: "ready",
+          checkpoint: "none",
+          planApproval: "pending",
+        })
+
+        const prompt = spyOn(SessionPrompt, "prompt").mockImplementation((async () => {
+          return { parts: [{ type: "text", text: "done" }] } as any
+        }) as any)
+
+        const tool = await TaskTool.init()
+        const result = await tool.execute(
+          { description: "locked task", prompt: "Inspect only", subagent_type: "explore" },
+          ctx(member.id, memberMsg, await Session.messages({ sessionID: member.id })),
+        )
+
+        const child = await Session.get(result.metadata.sessionId)
+        expect(Permission.evaluate("edit", "src/index.ts", child.permission ?? []).action).toBe("deny")
+        expect(Permission.evaluate("bash", "git status", child.permission ?? []).action).toBe("deny")
+
+        prompt.mockRestore()
+        await Team.setMemberStatus("task-lock-team", "worker", "shutdown")
+        await Team.cleanup("task-lock-team")
+      },
+    })
+  })
+
+  test("restricted delegates inherit parent deny rules", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({})
+        const member = await Session.create({ parentID: lead.id })
+        await seed(lead.id)
+        const memberSeed = await seed(member.id)
+        const memberMsg = await assist(member.id, memberSeed)
+
+        await Session.setPermission({
+          sessionID: member.id,
+          permission: [
+            { permission: "edit", pattern: "*:plan-approval", action: "deny" },
+            { permission: "bash", pattern: "*:plan-approval", action: "deny" },
+          ],
+        })
+
+        await Team.create({ name: "delegate-lock-team", leadSessionID: lead.id })
+        await Team.addMember("delegate-lock-team", {
+          name: "worker",
+          sessionID: member.id,
+          agent: "general",
+          status: "ready",
+          checkpoint: "none",
+          planApproval: "pending",
+        })
+
+        const prompt = spyOn(SessionPrompt, "prompt").mockImplementation((async () => {
+          return { parts: [{ type: "text", text: "done" }] } as any
+        }) as any)
+
+        const tool = await TeamDelegateTool.init()
+        const result = await tool.execute(
+          { description: "locked delegate", prompt: "Inspect only", agent: "explore" },
+          ctx(member.id, memberMsg, await Session.messages({ sessionID: member.id })),
+        )
+
+        const child = await Session.get(result.metadata.sessionId)
+        expect(Permission.evaluate("edit", "src/index.ts", child.permission ?? []).action).toBe("deny")
+        expect(Permission.evaluate("bash", "git status", child.permission ?? []).action).toBe("deny")
+
+        prompt.mockRestore()
+        await Team.setMemberStatus("delegate-lock-team", "worker", "shutdown")
+        await Team.cleanup("delegate-lock-team")
       },
     })
   })

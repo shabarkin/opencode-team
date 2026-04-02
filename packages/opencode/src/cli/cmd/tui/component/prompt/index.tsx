@@ -249,6 +249,7 @@ export function Prompt(props: PromptProps) {
                   member.execution_status,
                 )
               ) {
+                if (!member.sessionID) continue
                 sdk.client.session.abort({ sessionID: member.sessionID }).catch(() => {})
               }
             }

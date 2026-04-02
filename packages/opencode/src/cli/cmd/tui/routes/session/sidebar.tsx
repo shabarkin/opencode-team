@@ -120,11 +120,15 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                         : ""}
                     </span>
                   </text>
-                  <Show when={teamData().role === "member"}>
+                  <Show when={teamData().role === "member" && teamData().leadSessionID}>
                     <box
                       flexDirection="row"
                       gap={1}
-                      onMouseUp={() => route.navigate({ type: "session", sessionID: teamData().leadSessionID })}
+                      onMouseUp={() => {
+                        const sid = teamData().leadSessionID
+                        if (!sid) return
+                        route.navigate({ type: "session", sessionID: sid })
+                      }}
                     >
                       <text fg={theme.primary}>←</text>
                       <text fg={theme.text}>
@@ -137,7 +141,10 @@ export function Sidebar(props: { sessionID: string; overlay?: boolean }) {
                       <box
                         flexDirection="row"
                         gap={1}
-                        onMouseUp={() => route.navigate({ type: "session", sessionID: m.sessionID })}
+                        onMouseUp={() => {
+                          if (!m.sessionID) return
+                          route.navigate({ type: "session", sessionID: m.sessionID })
+                        }}
                       >
                         <text
                           flexShrink={0}

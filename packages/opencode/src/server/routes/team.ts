@@ -33,13 +33,21 @@ const TeamSteerAll = z.object({
   text: z.string(),
 })
 
-const TeamSessionResponse = z.object({
+const LeadTeamSessionResponse = z.object({
   team: TeamInfoSessionSchema,
   tasks: z.array(TeamTaskSchema),
   leadSessionID: SessionID.zod,
-  role: z.enum(["lead", "member"]),
+  role: z.literal("lead"),
+})
+
+const MemberTeamSessionResponse = z.object({
+  team: TeamInfoPublicSchema,
+  tasks: z.array(TeamTaskSchema),
+  role: z.literal("member"),
   memberName: MemberNameSchema.optional(),
 })
+
+const TeamSessionResponse = z.union([LeadTeamSessionResponse, MemberTeamSessionResponse])
 
 type Info = NonNullable<Awaited<ReturnType<typeof Team.get>>>
 
@@ -86,6 +94,10 @@ function sessionTeam(team: Info) {
     })),
     pending_spawn_requests: team.pending_spawn_requests,
   }
+}
+
+function memberTeam(team: Info) {
+  return publicTeam(team)
 }
 
 async function lead(c: Context, name: string): Promise<{ team: Info } | { error: Response }> {
@@ -204,11 +216,19 @@ export const TeamRoutes = lazy(() =>
         if (caller(c) !== sessionID) return c.json({ error: "Forbidden" }, 403)
         const result = await Team.findBySession(sessionID)
         if (!result) return c.json(null)
+        const tasks = await TeamTasks.list(result.team.name)
+        if (result.role === "lead") {
+          return c.json({
+            team: sessionTeam(result.team),
+            tasks,
+            leadSessionID: SessionID.make(result.team.leadSessionID),
+            role: "lead" as const,
+          })
+        }
         return c.json({
-          team: sessionTeam(result.team),
-          tasks: await TeamTasks.list(result.team.name),
-          leadSessionID: SessionID.make(result.team.leadSessionID),
-          role: result.role,
+          team: memberTeam(result.team),
+          tasks,
+          role: "member" as const,
           memberName: result.memberName,
         })
       },

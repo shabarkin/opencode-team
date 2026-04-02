@@ -92,7 +92,7 @@ export function Header() {
   const steer = createMemo(() => {
     const info = team()
     if (!info) return false
-    if (info.role === "member") return true
+    if (info.role !== "lead") return false
     return info.members.length > 0
   })
 

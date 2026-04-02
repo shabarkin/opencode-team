@@ -167,7 +167,9 @@ export function Session() {
   const teamMembers = createMemo(() => {
     const info = teamInfo()
     if (!info?.members?.length) return []
-    return info.members.filter((m) => m.sessionID && m.status !== "shutdown")
+    return info.members.flatMap((m) =>
+      !m.sessionID || m.status === "shutdown" ? [] : [{ ...m, sessionID: m.sessionID }],
+    )
   })
 
   const wide = createMemo(() => dimensions().width > 120)

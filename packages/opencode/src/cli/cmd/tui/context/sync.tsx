@@ -78,13 +78,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       team: {
         [sessionID: string]: {
           teamName: string
-          leadSessionID: string
+          leadSessionID?: string
           role: "lead" | "member"
           memberName?: string
           delegate?: boolean
           members: Array<{
             name: string
-            sessionID: string
+            sessionID?: string
             agent: string
             status: "ready" | "busy" | "paused" | "shutdown_requested" | "shutdown" | "error"
             execution_status:

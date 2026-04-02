@@ -96,16 +96,21 @@ export const TeamShutdownAllTool = Tool.define("team_shutdown_all", {
     }
 
     if (params.force) {
-      await Team.forceShutdownAll(info.team.name, params.reason)
+      const result = await Team.forceShutdownAll(info.team.name, params.reason)
       await Team.setTeamPhase(info.team.name, "delivery")
       return {
         title: "Shutdown requested for all teammates",
         output: [
-          `Force shutdown applied to ${live.length} teammate(s).`,
+          `Force shutdown confirmed for ${result.shutdown.length} teammate(s).`,
+          result.pending.length > 0
+            ? `Still draining: ${result.pending.join(", ")}. Cleanup must wait until their prompt loops stop.`
+            : "",
           "Use this only when repeated errors/noise are derailing the team or you explicitly need an emergency stop.",
           "After final delivery, call team_cleanup to end team mode and resume normal non-team chat unless the user asks for a team again.",
-        ].join("\n"),
-        metadata: { count: live.length, force: true },
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        metadata: { count: result.shutdown.length, pending: result.pending.length, force: true },
       }
     }
 

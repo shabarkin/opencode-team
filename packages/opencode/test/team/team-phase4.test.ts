@@ -686,7 +686,7 @@ describe("team phase 4", () => {
       init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
       fn: async () => {
         const { lead } = await basic("phase4-shutdown-force")
-        const force = spyOn(Team, "forceShutdownAll").mockResolvedValue()
+        const force = spyOn(Team, "forceShutdownAll").mockResolvedValue({ shutdown: ["worker"], pending: [] })
         const out = await (await TeamShutdownAllTool.init()).execute({ force: true }, ctx(lead.id))
         expect(out.output).toContain("Force shutdown")
         expect(out.output).toContain("call team_cleanup to end team mode")
@@ -705,8 +705,9 @@ describe("team phase 4", () => {
       init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
       fn: async () => {
         const { lead } = await basic("phase4-cleanup-force")
-        const force = spyOn(Team, "forceShutdownAll").mockImplementation(async (teamName) => {
+        const force = spyOn(Team, "forceShutdownAll").mockImplementation(async (teamName, _reason) => {
           await Team.setMemberStatus(teamName, "worker", "shutdown")
+          return { shutdown: ["worker"], pending: [] }
         })
 
         const out = await (

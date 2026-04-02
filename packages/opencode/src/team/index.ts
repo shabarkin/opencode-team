@@ -81,6 +81,8 @@ export {
 
 /** Write tools that are denied during plan-approval or delegate mode */
 export const WRITE_TOOLS = ["bash", "write", "edit", "multiedit", "apply_patch"] as const
+const CHILD_LOCK_TOOLS = ["task", "team_delegate"] as const
+const LOCKED_TOOLS = [...WRITE_TOOLS, ...CHILD_LOCK_TOOLS] as const
 export const DELEGATE_PATTERN = "*:delegate"
 
 const log = Log.create({ service: "team" })
@@ -257,10 +259,16 @@ function timeout(teamName: string, name: string, sessionID: string) {
     const member = team?.members.find((item) => item.name === name)
     if (!member || member.status === "shutdown") return
 
-    const { SessionPrompt } = await import("../session/prompt")
-    const { SessionID } = await import("../session/schema")
-    await SessionPrompt.cancel(SessionID.make(sessionID))
-    await Team.transitionMemberStatus(teamName, name, "shutdown", { force: true })
+    const ok = (await Team.cancelMember(teamName, name)) || (await stopped(sessionID))
+    if (ok) {
+      await Team.transitionMemberStatus(teamName, name, "shutdown", { force: true })
+      return
+    }
+
+    await noticeLead(
+      teamName,
+      `Timed out waiting for "${name}" to stop. Their session is still running, so cleanup will stay blocked until it exits.`,
+    )
   }, SHUTDOWN_TIMEOUT)
 }
 
@@ -388,6 +396,28 @@ function checkpointMatch(mode: CheckpointModeType, tool: string) {
   if (mode === "after_each_tool") return true
   if (mode === "after_each_write") return WRITE_TOOLS.includes(tool as (typeof WRITE_TOOLS)[number])
   return false
+}
+
+function lockRules(pattern: string) {
+  return LOCKED_TOOLS.map((permission) => ({
+    permission,
+    pattern,
+    action: "deny" as const,
+  }))
+}
+
+async function childPermission(sessionID: string, rules: Rule[]) {
+  const { Session } = await import("../session")
+  const { SessionID } = await import("../session/schema")
+  const session = await Session.get(SessionID.make(sessionID)).catch(() => undefined)
+  return [...rules, ...((session?.permission ?? []).filter((rule) => rule.action === "deny") as Rule[])]
+}
+
+async function stopped(sessionID: string) {
+  const { SessionStatus } = await import("../session/status")
+  const { SessionID } = await import("../session/schema")
+  const status = await SessionStatus.get(SessionID.make(sessionID))
+  return status.type === "idle"
 }
 
 function state(message: string) {
@@ -1261,17 +1291,13 @@ export namespace Team {
     ]
     rules.push(...scopeRules(scope, tree?.path ?? Inst.directory))
     if (input.mode === "research") {
-      rules.push(
-        ...WRITE_TOOLS.map((tool) => ({ permission: tool, pattern: "*:research-mode", action: "deny" as const })),
-      )
+      rules.push(...lockRules("*:research-mode"))
     }
     if (input.planApproval) {
       // Pattern "*:plan-approval" is intentionally NOT "*" — PermissionNext.disabled() only
       // strips tools with pattern "*", so these remain visible to the model but are denied at
       // execution time. The ":plan-approval" tag lets approvePlan() remove only these rules.
-      rules.push(
-        ...WRITE_TOOLS.map((tool) => ({ permission: tool, pattern: "*:plan-approval", action: "deny" as const })),
-      )
+      rules.push(...lockRules("*:plan-approval"))
     }
 
     const { SessionID } = await import("../session/schema")
@@ -1279,7 +1305,7 @@ export namespace Team {
       parentID: SessionID.make(input.parentSessionID),
       directory: tree?.path ?? Inst.directory,
       title: `${input.name} (@${input.agent.name} teammate, ${label})${input.planApproval ? " [plan mode]" : ""}`,
-      permission: rules,
+      permission: await childPermission(input.parentSessionID, rules),
     }).catch(async (err: unknown) => {
       if (tree) {
         await Project.removeSandbox(Inst.project.id, tree.path).catch(() => undefined)
@@ -1341,7 +1367,7 @@ export namespace Team {
       ? [
           "",
           "IMPORTANT: You are in PLAN MODE (read-only). You can read files, search, and explore,",
-          "but you CANNOT write, edit, or run bash commands until the lead approves your plan.",
+          "but you CANNOT write, edit, run bash commands, or spawn child subagents until the lead approves your plan.",
           "",
           "Your workflow:",
           "1. Research and explore the codebase to understand the problem",
@@ -1368,7 +1394,7 @@ export namespace Team {
         ? [
             "",
             "RESEARCH MODE: You are read-only.",
-            "Do not write files, edit code, or run bash commands. Focus on investigation and reporting.",
+            "Do not write files, edit code, run bash commands, or spawn child subagents. Focus on investigation and reporting.",
             "",
           ]
         : []
@@ -1766,7 +1792,10 @@ export namespace Team {
       () => true,
       async () => {
         await SessionPrompt.cancel(SessionID.make(member.sessionID))
-        await transitionMemberStatus(input.teamName, input.memberName, "shutdown")
+        const ok = (await Team.cancelMember(input.teamName, input.memberName)) || (await stopped(member.sessionID))
+        if (ok) {
+          await transitionMemberStatus(input.teamName, input.memberName, "shutdown")
+        }
         return false
       },
     )
@@ -1933,6 +1962,17 @@ export namespace Team {
         )
       }
 
+      const running: string[] = []
+      for (const member of team.members) {
+        if (await stopped(member.sessionID)) continue
+        running.push(member.name)
+      }
+      if (running.length > 0) {
+        throw new Error(
+          `Cannot clean up team "${teamName}": ${running.join(", ")} still have active session loops. Wait for prompt shutdown acknowledgement first.`,
+        )
+      }
+
       const trees = team.members.filter((member) => member.worktreePath && member.worktreeBranch)
       if (team.worktrees) {
         const pending = trees.filter((member) => !["merged", "skipped"].includes(member.mergeStatus ?? "pending"))
@@ -2032,10 +2072,13 @@ export namespace Team {
       throw state(`Teammate "${input.memberName}" cannot be paused from status ${member.status}.`)
     }
 
-    await transitionMemberStatus(input.teamName, input.memberName, "paused")
     if (member.status === "busy") {
-      await interrupt(input.teamName, input.memberName, true)
+      const ok = await interrupt(input.teamName, input.memberName, true)
+      if (!ok) {
+        throw state(`Teammate "${input.memberName}" did not stop after pause was requested.`)
+      }
     }
+    await transitionMemberStatus(input.teamName, input.memberName, "paused")
     if (input.reason) {
       const { TeamMessaging } = await import("./messaging")
       await TeamMessaging.send({
@@ -2081,15 +2124,35 @@ export namespace Team {
 
   export async function forceShutdownAll(teamName: string, reason?: string) {
     const team = await get(teamName)
-    if (!team) return
+    if (!team) return { shutdown: [] as string[], pending: [] as string[] }
+    const result = { shutdown: [] as string[], pending: [] as string[] }
     for (const member of team.members) {
-      if (member.status === "shutdown") continue
+      if (member.status === "shutdown") {
+        result.shutdown.push(member.name)
+        continue
+      }
       await transitionMemberStatus(teamName, member.name, "shutdown_requested", { force: true })
       if (member.status === "busy") {
-        await interrupt(teamName, member.name, true)
+        const ok = await interrupt(teamName, member.name, true)
+        if (!ok) {
+          result.pending.push(member.name)
+          continue
+        }
+      }
+      if (!(await stopped(member.sessionID))) {
+        result.pending.push(member.name)
+        continue
       }
       await transitionMemberStatus(teamName, member.name, "shutdown", { force: true })
+      result.shutdown.push(member.name)
     }
+    if (result.pending.length > 0) {
+      await noticeLead(
+        teamName,
+        `Forced shutdown requested${reason ? `: ${reason}` : ""}. ${result.pending.join(", ")} are still running, so cleanup must wait for them to stop.`,
+      )
+    }
+    return result
   }
 
   export function monitorCosts(options?: { delay?: number }) {
