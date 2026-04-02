@@ -1,4 +1,5 @@
 import { BusEvent } from "@/bus/bus-event"
+import { Bus } from "@/bus"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRunPromise } from "@/effect/run-service"
 import { SessionID } from "@/session/schema"
@@ -83,6 +84,16 @@ export namespace File {
         sessionID: SessionID.zod,
       }),
     ),
+  }
+
+  export async function edited(input: { file: string | string[]; sessionID: SessionID }) {
+    const files = Array.isArray(input.file) ? input.file : [input.file]
+    for (const file of files) {
+      await Bus.publish(File.Event.Edited, {
+        file,
+        sessionID: input.sessionID,
+      })
+    }
   }
 
   const log = Log.create({ service: "file" })

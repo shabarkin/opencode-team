@@ -1,7 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect, spyOn, test } from "bun:test"
 import path from "path"
 import * as fs from "fs/promises"
 import { ApplyPatchTool } from "../../src/tool/apply_patch"
+import { File } from "../../src/file"
 import { Instance } from "../../src/project/instance"
 import { tmpdir } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
@@ -237,6 +238,51 @@ describe("tool.apply_patch freeform", () => {
         const moved = path.join(fixture.path, "renamed", "dir", "name.txt")
         await expect(fs.readFile(original, "utf-8")).rejects.toThrow()
         expect(await fs.readFile(moved, "utf-8")).toBe("new content\n")
+      },
+    })
+  })
+
+  test("publishes delete provenance for removed file", async () => {
+    await using fixture = await tmpdir()
+    const { ctx } = makeCtx()
+
+    await Instance.provide({
+      directory: fixture.path,
+      fn: async () => {
+        const target = path.join(fixture.path, "remove.txt")
+        const pub = spyOn(File, "edited")
+        await fs.writeFile(target, "obsolete\n", "utf-8")
+
+        await execute({ patchText: "*** Begin Patch\n*** Delete File: remove.txt\n*** End Patch" }, ctx)
+
+        expect(pub).toHaveBeenCalledWith({ file: target, sessionID: ctx.sessionID })
+        pub.mockRestore()
+      },
+    })
+  })
+
+  test("publishes move provenance for source and destination", async () => {
+    await using fixture = await tmpdir()
+    const { ctx } = makeCtx()
+
+    await Instance.provide({
+      directory: fixture.path,
+      fn: async () => {
+        const src = path.join(fixture.path, "old.txt")
+        const dst = path.join(fixture.path, "new.txt")
+        const pub = spyOn(File, "edited")
+        await fs.writeFile(src, "before\n", "utf-8")
+
+        await execute(
+          {
+            patchText:
+              "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n-before\n+after\n*** End Patch",
+          },
+          ctx,
+        )
+
+        expect(pub).toHaveBeenCalledWith({ file: [src, dst], sessionID: ctx.sessionID })
+        pub.mockRestore()
       },
     })
   })

@@ -186,20 +186,22 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
 
     // Apply the changes
     const updates: Array<{ file: string; event: "add" | "change" | "unlink" }> = []
+    const edited: string[] = []
 
     for (const change of fileChanges) {
-      const edited = change.type === "delete" ? undefined : (change.movePath ?? change.filePath)
       switch (change.type) {
         case "add":
           // Create parent directories (recursive: true is safe on existing/root dirs)
           await fs.mkdir(path.dirname(change.filePath), { recursive: true })
           await fs.writeFile(change.filePath, change.newContent, "utf-8")
           updates.push({ file: change.filePath, event: "add" })
+          edited.push(change.filePath)
           break
 
         case "update":
           await fs.writeFile(change.filePath, change.newContent, "utf-8")
           updates.push({ file: change.filePath, event: "change" })
+          edited.push(change.filePath)
           break
 
         case "move":
@@ -210,22 +212,19 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
             await fs.unlink(change.filePath)
             updates.push({ file: change.filePath, event: "unlink" })
             updates.push({ file: change.movePath, event: "add" })
+            edited.push(change.filePath, change.movePath)
           }
           break
 
         case "delete":
           await fs.unlink(change.filePath)
           updates.push({ file: change.filePath, event: "unlink" })
+          edited.push(change.filePath)
           break
       }
-
-      if (edited) {
-        await Bus.publish(File.Event.Edited, {
-          file: edited,
-          sessionID: ctx.sessionID,
-        })
-      }
     }
+
+    await File.edited({ file: edited.length === 1 ? edited[0]! : edited, sessionID: ctx.sessionID })
 
     // Publish file change events
     for (const update of updates) {

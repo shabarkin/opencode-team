@@ -1,20 +1,35 @@
 import { describe, expect, test, spyOn } from "bun:test"
+import { ApplyPatchTool } from "../../src/tool/apply_patch"
 import path from "path"
 import { Instance } from "../../src/project/instance"
 import { File } from "../../src/file"
 import { Session } from "../../src/session"
 import { Team } from "../../src/team"
-import { SessionID } from "../../src/session/schema"
+import { MessageID, SessionID } from "../../src/session/schema"
 import { Bus } from "../../src/bus"
 import { Env } from "../../src/env"
 import { Log } from "../../src/util/log"
 import { activeConflicts, initFileTracking } from "../../src/team/files"
 import { TeamMessaging } from "../../src/team/messaging"
 import { Plugin } from "../../src/plugin"
+import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
 
 const root = path.join(__dirname, "../..")
+
+function ctx(sessionID: string) {
+  return {
+    sessionID: SessionID.make(sessionID),
+    messageID: MessageID.make(""),
+    callID: "",
+    agent: "build",
+    abort: AbortSignal.any([]),
+    messages: [],
+    metadata: () => {},
+    ask: async () => {},
+  }
+}
 
 describe("team file tracking", () => {
   test("tracks conflicts per team only", async () => {
@@ -33,9 +48,9 @@ describe("team file tracking", () => {
         await Team.addMember("files-b", { name: "b1", sessionID: "ses_b1", agent: "general", status: "busy" })
         await Team.addMember("files-b", { name: "b2", sessionID: "ses_b2", agent: "general", status: "busy" })
 
-        await Bus.publish(File.Event.Edited, { file: "/tmp/shared.ts", sessionID: SessionID.make("ses_a1") })
-        await Bus.publish(File.Event.Edited, { file: "/tmp/shared.ts", sessionID: SessionID.make("ses_b1") })
-        await Bus.publish(File.Event.Edited, { file: "/tmp/shared.ts", sessionID: SessionID.make("ses_a2") })
+        await File.edited({ file: "/tmp/shared.ts", sessionID: SessionID.make("ses_a1") })
+        await File.edited({ file: "/tmp/shared.ts", sessionID: SessionID.make("ses_b1") })
+        await File.edited({ file: "/tmp/shared.ts", sessionID: SessionID.make("ses_a2") })
 
         expect(activeConflicts("files-a")).toEqual([{ file: "/tmp/shared.ts", members: ["a1", "a2"] }])
         expect(activeConflicts("files-b")).toEqual([])
@@ -65,9 +80,9 @@ describe("team file tracking", () => {
         await Team.addMember("files-c", { name: "c1", sessionID: "ses_c1", agent: "general", status: "busy" })
         await Team.addMember("files-c", { name: "c2", sessionID: "ses_c2", agent: "general", status: "busy" })
 
-        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-c.ts", sessionID: SessionID.make("ses_c1") })
+        await File.edited({ file: "/tmp/shared-c.ts", sessionID: SessionID.make("ses_c1") })
         await Team.transitionMemberStatus("files-c", "c1", "shutdown_requested")
-        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-c.ts", sessionID: SessionID.make("ses_c2") })
+        await File.edited({ file: "/tmp/shared-c.ts", sessionID: SessionID.make("ses_c2") })
 
         const team = await Team.get("files-c")
         expect(activeConflicts("files-c", team!)).toEqual([])
@@ -96,9 +111,9 @@ describe("team file tracking", () => {
         await Team.addMember("files-d", { name: "d1", sessionID: "ses_d1", agent: "general", status: "busy" })
         await Team.addMember("files-d", { name: "d2", sessionID: "ses_d2", agent: "general", status: "busy" })
 
-        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-d.ts", sessionID: SessionID.make("ses_d1") })
-        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-d.ts", sessionID: SessionID.make("ses_d2") })
-        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-d.ts", sessionID: SessionID.make("ses_d1") })
+        await File.edited({ file: "/tmp/shared-d.ts", sessionID: SessionID.make("ses_d1") })
+        await File.edited({ file: "/tmp/shared-d.ts", sessionID: SessionID.make("ses_d2") })
+        await File.edited({ file: "/tmp/shared-d.ts", sessionID: SessionID.make("ses_d1") })
 
         const conflicts = activeConflicts("files-d")
         expect(conflicts).toHaveLength(1)
@@ -135,8 +150,8 @@ describe("team file tracking", () => {
         await Team.addMember("files-e", { name: "e1", sessionID: "ses_e1", agent: "general", status: "busy" })
         await Team.addMember("files-e", { name: "e2", sessionID: "ses_e2", agent: "general", status: "busy" })
 
-        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-e.ts", sessionID: SessionID.make("ses_e1") })
-        await Bus.publish(File.Event.Edited, { file: "/tmp/shared-e.ts", sessionID: SessionID.make("ses_e2") })
+        await File.edited({ file: "/tmp/shared-e.ts", sessionID: SessionID.make("ses_e1") })
+        await File.edited({ file: "/tmp/shared-e.ts", sessionID: SessionID.make("ses_e2") })
 
         expect(pause).toHaveBeenCalledTimes(2)
 
@@ -176,8 +191,8 @@ describe("team file tracking", () => {
           worktreePath: "/tmp/team-files-f2",
         })
 
-        await Bus.publish(File.Event.Edited, { file: ".ananke/findings.db", sessionID: SessionID.make("ses_f1") })
-        await Bus.publish(File.Event.Edited, { file: ".ananke/findings.db", sessionID: SessionID.make("ses_f2") })
+        await File.edited({ file: ".ananke/findings.db", sessionID: SessionID.make("ses_f1") })
+        await File.edited({ file: ".ananke/findings.db", sessionID: SessionID.make("ses_f2") })
 
         const team = await Team.get("files-f")
         expect(activeConflicts("files-f", team!)).toEqual([])
@@ -218,6 +233,77 @@ describe("team file tracking", () => {
         await Team.setMemberStatus("files-g", "g1", "shutdown")
         await Team.setMemberStatus("files-g", "g2", "shutdown")
         await Team.cleanup("files-g")
+      },
+    })
+  })
+
+  test("tracks apply_patch delete provenance", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const stop = initFileTracking()
+        const tool = await ApplyPatchTool.init()
+
+        await Bun.write(path.join(tmp.path, "shared.txt"), "alpha\n")
+        await Team.create({ name: "files-h", leadSessionID: "ses_lead_files_h" })
+        await Team.addMember("files-h", { name: "h1", sessionID: "ses_h1", agent: "general", status: "busy" })
+        await Team.addMember("files-h", { name: "h2", sessionID: "ses_h2", agent: "general", status: "busy" })
+
+        await tool.execute(
+          { patchText: "*** Begin Patch\n*** Update File: shared.txt\n@@\n-alpha\n+beta\n*** End Patch" },
+          ctx("ses_h1"),
+        )
+        await tool.execute({ patchText: "*** Begin Patch\n*** Delete File: shared.txt\n*** End Patch" }, ctx("ses_h2"))
+
+        expect(activeConflicts("files-h")).toEqual([{ file: path.join(tmp.path, "shared.txt"), members: ["h1", "h2"] }])
+
+        stop()
+        await Team.setMemberStatus("files-h", "h1", "shutdown")
+        await Team.setMemberStatus("files-h", "h2", "shutdown")
+        await Team.cleanup("files-h")
+      },
+    })
+  })
+
+  test("tracks apply_patch move provenance on source path", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        Env.set("ANTHROPIC_API_KEY", "test-key")
+      },
+      fn: async () => {
+        const stop = initFileTracking()
+        const tool = await ApplyPatchTool.init()
+        const file = path.join(tmp.path, "old.txt")
+
+        await Bun.write(file, "alpha\n")
+        await Team.create({ name: "files-i", leadSessionID: "ses_lead_files_i" })
+        await Team.addMember("files-i", { name: "i1", sessionID: "ses_i1", agent: "general", status: "busy" })
+        await Team.addMember("files-i", { name: "i2", sessionID: "ses_i2", agent: "general", status: "busy" })
+
+        await tool.execute(
+          { patchText: "*** Begin Patch\n*** Update File: old.txt\n@@\n-alpha\n+beta\n*** End Patch" },
+          ctx("ses_i1"),
+        )
+        await tool.execute(
+          {
+            patchText:
+              "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n-beta\n+gamma\n*** End Patch",
+          },
+          ctx("ses_i2"),
+        )
+
+        expect(activeConflicts("files-i")).toEqual([{ file, members: ["i1", "i2"] }])
+
+        stop()
+        await Team.setMemberStatus("files-i", "i1", "shutdown")
+        await Team.setMemberStatus("files-i", "i2", "shutdown")
+        await Team.cleanup("files-i")
       },
     })
   })

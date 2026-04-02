@@ -67,8 +67,7 @@ export function initFileTracking(): () => void {
     const now = Date.now()
     const teamName = info.team.name
     const editor = info.memberName
-    const team = await Team.get(teamName)
-    if (!team) return
+    const team = info.team
     const skip = shutdowns(team)
     if (skip.has(editor)) return
     const member = team.members.find((item) => item.name === editor)
