@@ -1,0 +1,339 @@
+---
+title: Agent Teams
+description: Coordinate experimental multi-session work in this fork of OpenCode.
+---
+
+This fork adds an experimental **Agent Teams** workflow on top of upstream OpenCode.
+It lets one lead session coordinate multiple teammate sessions, each with its own context, tools, status, and optional isolated worktree.
+
+:::note
+This page documents the `feat/agent-teams` fork, not upstream `anomalyco/opencode`.
+Enable the feature with `OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1`.
+:::
+
+---
+
+## Start here
+
+```bash
+OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1 opencode
+```
+
+Optional isolated teammate worktrees:
+
+```bash
+OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1 \
+OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES=1 \
+opencode
+```
+
+At a high level:
+
+1. The lead creates a named team with `team_create`.
+2. The lead spawns specialists with `team_spawn`.
+3. Teammates coordinate through inbox-backed `team_*` tools.
+4. The lead steers, reviews, and collects structured results.
+5. The lead shuts the team down and, in worktree mode, merges each teammate branch before cleanup.
+
+---
+
+## What this branch adds
+
+| Surface | What changed |
+| ------- | ------------ |
+| Core state | New `packages/opencode/src/team/` services for lifecycle, messaging, recovery, worktrees, merges, notepad, conflict tracking, and policy hooks |
+| Tooling | New `team_*` tools for creation, spawning, messaging, review, collection, shutdown, health, restart, merge, and cleanup |
+| Server | New `/team` routes for session-scoped team state and steering |
+| TUI | Team dialog, steer dialog, team-aware header/sidebar state, and prompt-level teammate messaging |
+| UI rendering | Custom cards for `team_create`, `team_spawn`, `team_delegate`, and `team_request_spawn` parts |
+| Recovery and safety | Restart recovery, inbox durability, freshness checks, shutdown guards, conflict detection, and budget/deadline enforcement |
+
+---
+
+## Core concepts
+
+### Lead session
+
+The lead owns orchestration.
+Once a team exists, the lead is expected to split work, steer teammates, monitor progress, and synthesize only after collecting results.
+
+### Teammate sessions
+
+Each teammate is a real child session with its own:
+
+- agent
+- model
+- permission set
+- prompt loop
+- status and execution state
+- optional worktree branch and directory
+
+### Shared coordination state
+
+Every team can use:
+
+- a shared task board via `team_tasks` and `team_claim`
+- a shared notepad via `team_notepad`
+- durable inboxes for direct messages, broadcasts, plans, and results
+
+### Review loops
+
+This branch adds two built-in review patterns:
+
+- **Plan approval**: spawn a teammate in read-only plan mode and unlock write tools later with `team_approve_plan`
+- **Checkpoint review**: pause a teammate at configured boundaries, inspect progress, then resume or redirect them
+
+### Steering
+
+Steering is a non-destructive way to redirect work already in progress.
+The lead can message, pause, resume, restart, or broadcast updated instructions without tearing the whole team down.
+
+See [Steering](/docs/steering).
+
+---
+
+## Team lifecycle
+
+### 1. Create the team
+
+`team_create` establishes the team record and optional shared tasks.
+
+Useful options include:
+
+- `delegate`: keep the lead in coordination-only mode
+- `collect_strict`: require fresh teammate results during collection
+- `require_result_before_shutdown`: block shutdown until assigned work has a result
+- `max_cost`: team-wide budget cap
+- `output_format: single_synthesis`: force one consolidated final answer
+
+### 2. Spawn teammates
+
+`team_spawn` creates child sessions with a model, agent, prompt, and optional safety settings such as:
+
+- `mode: research` for read-only investigation
+- `require_plan_approval`
+- `checkpoint`
+- `timeout`
+- `max_cost`
+- `result_deadline`
+- `claim_task`
+- scoped file and bash access
+
+### 3. Coordinate work
+
+Teammates coordinate with:
+
+- `team_message`, `team_reply`, `team_broadcast`
+- `team_inbox`
+- `team_tasks`, `team_claim`
+- `team_notepad`
+- `team_phase`
+- `team_status`, `team_health`
+
+Teammates can also request more help with `team_request_spawn` or run a lightweight private helper with `team_delegate`.
+
+### 4. Review and collect
+
+The lead can:
+
+- approve or reject plans with `team_approve_plan`
+- resume a checkpointed teammate with new instructions
+- use `team_collect` to wait for structured results instead of redoing the work
+
+### 5. Shut down the team
+
+The lead uses `team_shutdown` or `team_shutdown_all`.
+Shutdown can be deferred if teammates still have active assigned work and fresh results are required.
+
+### 6. Merge and clean up
+
+In shared-directory mode, cleanup can happen after shutdown.
+In worktree mode, the lead must run `team_merge` before `team_cleanup`.
+
+See [Worktrees](/docs/worktrees).
+
+---
+
+## Architecture
+
+### Implementation map
+
+| Area | Files |
+| ---- | ----- |
+| Team state and lifecycle | `packages/opencode/src/team/index.ts`, `packages/opencode/src/team/events.ts` |
+| Durable inbox and delivery | `packages/opencode/src/team/inbox.ts`, `packages/opencode/src/team/messaging.ts` |
+| Task board and notepad | `packages/opencode/src/team/index.ts`, `packages/opencode/src/team/notepad.ts` |
+| Worktree orchestration | `packages/opencode/src/team/worktree.ts`, `packages/opencode/src/team/merge.ts` |
+| Conflict tracking | `packages/opencode/src/team/files.ts` |
+| Policy hooks | `packages/opencode/src/team/policy.ts`, `packages/plugin/src/index.ts` |
+| Tool surface | `packages/opencode/src/tool/team.ts`, `team-collect.ts`, `team-inbox.ts`, `team-lifecycle.ts`, `team-status.ts`, `team-notepad.ts`, `team-delegate.ts` |
+| HTTP routes | `packages/opencode/src/server/routes/team.ts`, `packages/opencode/src/server/routes/session.ts` |
+| TUI surfaces | `packages/opencode/src/cli/cmd/tui/component/dialog-team.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/dialog-team-steer.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/header.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/sidebar.tsx`, `packages/opencode/src/cli/cmd/tui/context/sync.tsx` |
+| UI message rendering | `packages/ui/src/components/message-part-team.ts`, `packages/ui/src/components/message-part.tsx` |
+| Test coverage | `packages/opencode/test/team/`, `packages/opencode/test/server/team-routes.test.ts`, `packages/opencode/test/tool/task-team-isolation.test.ts` |
+
+### Component diagram
+
+```text
+Lead session
+  │
+  ├─ team_create / team_spawn / team_collect / team_shutdown*
+  │
+  ▼
+Team state (Storage-backed)
+  ├─ members + lifecycle
+  ├─ TeamTasks shared board
+  ├─ TeamNotepad shared context
+  ├─ Inbox JSONL per recipient
+  ├─ TeamMessaging delivery + recovery
+  ├─ TeamScope permission shaping
+  ├─ TeamFiles conflict detection
+  └─ TeamWorktree / TeamMerge
+        │
+        ├─ /team HTTP routes
+        ├─ /event stream → TUI sync refresh
+        ├─ session steering/message routes
+        └─ UI cards for team tool results
+```
+
+### Spawn flow
+
+```text
+lead calls team_spawn
+  → team policy checks
+  → effective scope is computed
+  → optional worktree is created
+  → child session is created with team-aware permissions
+  → teammate record is stored
+  → notepad/tasks/peer context is injected as a user message
+  → teammate prompt loop starts in the background
+```
+
+### Delivery flow
+
+```text
+teammate claims or receives work
+  → teammate reports progress with team_message / team_phase / team_tasks
+  → teammate sends final structured result with team_submit_result
+  → lead waits with team_collect
+  → lead produces one final synthesis
+  → lead shuts team down
+  → worktree teams merge branches, then cleanup
+```
+
+---
+
+## Tool groups
+
+### Lead lifecycle tools
+
+- `team_create`
+- `team_spawn`
+- `team_shutdown`
+- `team_shutdown_all`
+- `team_merge`
+- `team_cleanup`
+
+### Messaging and reporting tools
+
+- `team_message`
+- `team_reply`
+- `team_broadcast`
+- `team_inbox`
+- `team_submit_result`
+- `team_wait`
+- `team_collect`
+
+### Shared state tools
+
+- `team_tasks`
+- `team_claim`
+- `team_notepad`
+- `team_phase`
+- `team_status`
+- `team_health`
+
+### Review and recovery tools
+
+- `team_approve_plan`
+- `team_restart`
+- `team_request_spawn`
+- `team_delegate`
+
+For a shorter tool summary, see [Tools](/docs/tools).
+
+---
+
+## Safety, isolation, and recovery
+
+### Tool and permission isolation
+
+- Teammates cannot create nested teams.
+- Lead-only tools are explicitly denied for members.
+- Restrictive teammate agents still receive explicit allow rules for member-safe `team_*` tools.
+- Research mode and plan mode lock write surfaces.
+- Team-linked child tasks do not get team messaging rights; at most they receive read/list access to `team_notepad`.
+
+### Freshness checks
+
+This branch tracks when a teammate was last assigned work and when they last submitted a result.
+`team_collect` and shutdown guards can require a result newer than the latest assignment.
+
+### Durable delivery
+
+Team messages are first written to inbox storage, then injected into the recipient session.
+That keeps coordination resilient across restarts and delayed delivery.
+
+### Restart recovery
+
+Bootstrap recovery restores team state after server restarts, replays unread messages, and warns the lead when teammates need to be resumed.
+
+### Conflict detection
+
+Recent file edits are tracked per teammate.
+In shared-directory teams, overlapping edits can raise warnings or trigger policy action.
+In worktree teams, the same relative path can still collide later during merge.
+
+---
+
+## TUI and API surfaces
+
+### TUI
+
+- Header summary with member counts and pending requests
+- Sidebar member list with status and navigation back to the lead
+- Team dialog for teammates, tasks, and spawn requests
+- Steer dialog for message, pause, resume, cancel, and steer-all actions
+- Prompt-level direct teammate messaging
+
+### HTTP routes
+
+This fork adds `/team` routes for:
+
+- listing visible teams
+- reading team and task state
+- toggling delegate mode
+- steering, pausing, resuming, or cancelling teammates
+
+See [Server](/docs/server) and [Steering](/docs/steering).
+
+---
+
+## Operational notes
+
+- The feature is fully gated behind `OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1`.
+- Worktree mode is separately gated by `OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES=1`.
+- `/team` routes require the caller session in `x-opencode-session`.
+- Teammates should communicate through `team_*` tools; plain text replies are not enough for the lead to consume.
+- This fork keeps the feature experimental, so tool names and route details can still change.
+
+---
+
+## Related guides
+
+- [Worktrees](/docs/worktrees)
+- [Steering](/docs/steering)
+- [Agents](/docs/agents)
+- [Tools](/docs/tools)
+- [TUI](/docs/tui)
+- [Server](/docs/server)

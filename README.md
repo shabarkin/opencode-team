@@ -57,6 +57,20 @@ It exists to carry an experimental Agent Teams workflow inspired by [this portin
 OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1 opencode
 ```
 
+Optional isolated teammate worktrees are available with:
+
+```bash
+OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1 \
+OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES=1 \
+opencode
+```
+
+Fork-specific docs in this repo:
+
+- [Agent Teams](./packages/web/src/content/docs/agent-teams.mdx)
+- [Worktrees](./packages/web/src/content/docs/worktrees.mdx)
+- [Steering](./packages/web/src/content/docs/steering.mdx)
+
 Expect the feature and APIs to change as the fork evolves.
 
 ### Installation
@@ -134,6 +148,8 @@ Learn more about [agents](https://opencode.ai/docs/agents).
 ### Documentation
 
 For more info on how to configure OpenCode, [**head over to our docs**](https://opencode.ai/docs).
+
+For this fork's experimental surfaces, start with the dedicated docs pages for Agent Teams, Worktrees, and Steering linked above.
 
 ### Contributing
 

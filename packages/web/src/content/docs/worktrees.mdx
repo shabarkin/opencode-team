@@ -1,0 +1,228 @@
+---
+title: Worktrees
+description: Understand git worktree awareness in OpenCode and isolated teammate worktrees in this fork.
+---
+
+OpenCode is already worktree-aware: it distinguishes the session's **working directory** from the repository's **git worktree root**.
+This fork extends that idea with optional **isolated teammate worktrees** for Agent Teams.
+
+:::note
+The isolated teammate workflow on this page is fork-specific and experimental.
+Enable it with `OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1` and `OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES=1`.
+:::
+
+---
+
+## Two worktree concepts
+
+### 1. OpenCode's normal worktree root
+
+Across upstream OpenCode, `worktree` means the git worktree root for the current project.
+That root is important for:
+
+- project config discovery
+- skill discovery
+- plugin context
+- custom tool context
+- relative path handling for file tools
+
+In those cases:
+
+- `directory` = the session's current working directory
+- `worktree` = the git worktree root for the project
+
+### 2. Team-isolated worktrees in this fork
+
+When Agent Teams worktree mode is enabled, each teammate can be spawned into its own git worktree and branch.
+That gives every member an isolated directory while the lead stays on the main branch.
+
+---
+
+## Why the distinction matters
+
+### For users
+
+You can start OpenCode from a nested directory and still have project-local config, skills, and tooling resolved relative to the git worktree.
+
+### For plugin and custom-tool authors
+
+Use the right path for the job:
+
+- use `context.directory` when you want the current session directory
+- use `context.worktree` when you need the repository root
+
+This matters even more in team worktree mode, where a teammate's session directory may be a derived worktree instead of the lead's directory.
+
+---
+
+## How normal worktree awareness shows up
+
+### Config lookup
+
+Project config lookup walks upward until it reaches the nearest git directory.
+That is why a project-level `opencode.json` can still be found when you launch OpenCode from a subdirectory.
+
+### Skill discovery
+
+Project-local skills are also discovered by walking upward until the git worktree root.
+
+### Tool and plugin context
+
+Custom tools and plugins receive both `directory` and `worktree`.
+That lets tools resolve scripts from the repo root even when the current session is deeper inside the tree.
+
+---
+
+## Enable isolated teammate worktrees
+
+```bash
+OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1 \
+OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES=1 \
+opencode
+```
+
+Once that flag is on, `team_create` marks newly created teams as worktree teams.
+`team_spawn` then attempts to create a dedicated git worktree for each teammate.
+
+---
+
+## How teammate worktrees are implemented
+
+### Creation
+
+For a worktree team, teammate spawn does the following:
+
+1. Verify the lead directory is a git repo.
+2. Create a unique branch named like `team/<team>/<member>`.
+3. Create a worktree under OpenCode's data directory.
+4. Register that worktree as a project sandbox.
+5. Start the teammate session inside that directory.
+
+If worktree creation is unavailable, the fork falls back to the shared project directory and logs a warning.
+
+### Storage layout
+
+The worktree helper stores teammate trees under OpenCode data storage in a structure shaped like:
+
+```text
+<data>/worktrees/<projectID>/<teamName>/<memberName>
+```
+
+Branches are named like:
+
+```text
+team/<teamName>/<memberName>
+```
+
+If a name already exists, the helper retries with a generated suffix.
+
+---
+
+## Worktree architecture
+
+| Area | Files |
+| ---- | ----- |
+| Creation and removal | `packages/opencode/src/team/worktree.ts` |
+| Merge orchestration | `packages/opencode/src/team/merge.ts` |
+| Team spawn integration | `packages/opencode/src/team/index.ts` |
+| Tool entry points | `packages/opencode/src/tool/team.ts` |
+| Test coverage | `packages/opencode/test/team/team-worktree.test.ts`, `packages/opencode/test/team/team-merge.test.ts`, `packages/opencode/test/team/team-files.test.ts` |
+
+### Flow diagram
+
+```text
+lead repo
+  │
+  ├─ team_create (worktrees=true)
+  └─ team_spawn
+       │
+       ├─ git worktree add -b team/<team>/<member> <data>/worktrees/...
+       ├─ teammate session runs in isolated directory
+       ├─ edits happen away from the lead branch
+       └─ team_merge later merges the teammate branch back
+```
+
+---
+
+## Merge workflow
+
+The merge path is explicit on purpose.
+
+### Before merge
+
+- the lead workspace must be clean
+- the teammate should usually be `ready`, `shutdown`, or `error`
+- the teammate worktree may still have uncommitted edits
+
+### What `team_merge` does
+
+For each eligible teammate:
+
+1. Auto-stage and finalize any dirty worktree changes with a synthetic commit.
+2. Check whether the teammate branch is actually ahead.
+3. If there are no changes, mark the merge as `skipped`.
+4. If there are changes, run a normal git merge into the lead branch.
+5. On success, record `merged`.
+6. On conflict, abort the merge, record the conflict, and stop cleanup.
+
+### Merge diagram
+
+```text
+teammate worktree
+  ├─ dirty? yes → add -A + commit
+  ├─ ahead of lead? no → skipped
+  └─ ahead of lead? yes
+       ├─ merge succeeds → merged
+       └─ merge conflicts → abort, mark conflict, resolve manually, rerun team_merge
+```
+
+---
+
+## Cleanup rules
+
+`team_cleanup` is blocked until:
+
+- every teammate is shut down
+- active prompt loops have stopped
+- every worktree member is `merged` or `skipped`
+
+Cleanup then removes:
+
+- worktree directories
+- teammate branches
+- registered sandboxes
+- inboxes, notepad, file-tracking state, and stored team metadata
+
+Merged branches remain in the lead branch history.
+
+---
+
+## Shared-directory teams vs worktree teams
+
+| Mode | Benefits | Trade-offs |
+| ---- | -------- | ---------- |
+| Shared directory | Simpler, no merge step, easier for small review teams | More risk of overlapping edits in the same tree |
+| Isolated worktrees | Stronger filesystem isolation, explicit merge boundary, easier to reason about teammate ownership | Requires git repo support, explicit merge workflow, possible later merge conflicts |
+
+---
+
+## Practical guidance
+
+Use shared-directory teams when teammates are mostly researching, reviewing, or touching clearly separate files.
+
+Use worktree teams when:
+
+- multiple teammates may implement in parallel
+- you want a clear integration step before delivery
+- you want each teammate's filesystem activity isolated from the lead workspace
+
+---
+
+## Related docs
+
+- [Agent Teams](/docs/agent-teams)
+- [Steering](/docs/steering)
+- [Config](/docs/config)
+- [Skills](/docs/skills)
+- [Custom Tools](/docs/custom-tools)
+- [Plugins](/docs/plugins)

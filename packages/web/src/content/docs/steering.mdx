@@ -1,0 +1,201 @@
+---
+title: Steering
+description: Redirect active sessions and teammates without destructive resets.
+---
+
+This fork adds a more explicit **steering** workflow for both normal sessions and Agent Teams.
+Steering means injecting new guidance into work already in progress instead of tearing the session down and starting over.
+
+:::note
+Team steering is fork-specific and experimental.
+Enable it with `OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1`.
+:::
+
+---
+
+## What steering means
+
+### Session steering
+
+For a normal session, steering injects corrective instructions into the conversation without cancelling the current run first.
+If the session is idle, the loop is woken up.
+If it is already busy, the new guidance is queued into the active flow.
+
+### Team steering
+
+For a teammate, steering is status-aware.
+The lead can:
+
+- send a direct message while the teammate is busy
+- resume a paused teammate with a redirect
+- restart a ready or errored teammate with new instructions
+- broadcast new guidance to all active teammates
+
+---
+
+## Why this fork adds it
+
+Agent Teams only works well if the lead can keep teammates aligned without reclaiming every task personally.
+Steering gives the lead a fast feedback loop for:
+
+- clarifying scope
+- correcting direction
+- resuming checkpointed work
+- nudging teammates toward consensus
+- recovering idle or errored members
+
+---
+
+## TUI workflows
+
+### Steer a normal session
+
+When a non-team session is busy, the TUI exposes a steering prompt action.
+That action posts to the session steering route and injects follow-up instructions.
+
+### Steer a team from the header
+
+Lead sessions show a **Steer** action in the session header.
+The team steer dialog supports:
+
+- **Message** one teammate
+- **Pause** one teammate
+- **Resume** one teammate, optionally with redirect text
+- **Cancel** one teammate or all active teammates
+- **Steer all** active teammates at once
+
+### Direct teammate messaging from the prompt
+
+The TUI also supports direct lead-to-teammate messaging from the prompt.
+When a teammate is selected, prompt submission goes to the team message route instead of the normal chat loop.
+
+---
+
+## API surface
+
+### Session routes
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `POST` | `/session/:sessionID/steer` | Inject instructions into a normal session without cancelling its current work |
+| `POST` | `/session/:sessionID/team-message` | Send a direct lead message to a teammate from the active session |
+
+### Team routes
+
+| Method | Path | Purpose |
+| ------ | ---- | ------- |
+| `POST` | `/team/:name/steer` | Message, resume, or restart one teammate depending on status |
+| `POST` | `/team/:name/pause` | Pause one teammate without shutting the session down |
+| `POST` | `/team/:name/resume` | Resume a paused teammate, optionally with a redirect |
+| `POST` | `/team/:name/steer-all` | Broadcast updated instructions to active teammates |
+| `POST` | `/team/:name/cancel` | Cancel one teammate or all active teammates |
+
+All `/team` routes require the caller session in the `x-opencode-session` header.
+
+---
+
+## Review and approval loops
+
+### Plan approval
+
+If a teammate is spawned with plan approval enabled:
+
+1. They start in read-only plan mode.
+2. They research and send a plan back with `team_message`.
+3. The lead reviews it.
+4. The lead uses `team_approve_plan` to approve or reject it.
+5. Approval removes only the plan-mode deny rules, unlocking write tools.
+
+### Checkpoint review
+
+If checkpoint mode is enabled, the system pauses the teammate at configured boundaries.
+The lead can then inspect progress and resume the teammate with a redirect.
+
+---
+
+## Steering architecture
+
+| Area | Files |
+| ---- | ----- |
+| Normal session steering | `packages/opencode/src/server/routes/session.ts`, `packages/opencode/src/session/prompt.ts` |
+| Team steering routes | `packages/opencode/src/server/routes/team.ts` |
+| Team lifecycle hooks | `packages/opencode/src/team/index.ts` |
+| TUI steer dialog | `packages/opencode/src/cli/cmd/tui/routes/session/dialog-team-steer.tsx` |
+| Header and prompt wiring | `packages/opencode/src/cli/cmd/tui/routes/session/header.tsx`, `packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/index.tsx` |
+| Team state refresh | `packages/opencode/src/cli/cmd/tui/context/sync.tsx`, `packages/opencode/src/server/routes/event.ts` |
+
+### Session steering diagram
+
+```text
+user steers busy session
+  → POST /session/:id/steer
+  → SessionPrompt.steer()
+  → inject instruction into the session
+  → wake the loop only if the session is idle
+```
+
+### Team steering diagram
+
+```text
+lead chooses teammate action
+  → POST /team/:name/steer
+  → check teammate status
+     ├─ busy   → send message
+     ├─ paused → resume with redirect
+     ├─ ready  → restart with new instructions
+     └─ error  → restart with new instructions
+```
+
+### UI refresh diagram
+
+```text
+team action happens
+  → team.* event is published
+  → /event stream emits redacted update
+  → TUI notices team.*
+  → TUI refetches /team/by-session/:sessionID
+  → header, sidebar, and dialogs refresh from server truth
+```
+
+---
+
+## What users see in the UI
+
+### Operational chrome
+
+Team state appears in:
+
+- the session header
+- the session sidebar
+- the team dialog
+- the steer dialog
+
+### Conversation rendering
+
+The UI renders dedicated message cards for:
+
+- `team_create`
+- `team_spawn`
+- `team_delegate`
+- `team_request_spawn`
+
+Those cards can link directly to spawned child sessions.
+
+---
+
+## Operational notes
+
+- Session steering is non-destructive by design.
+- Team steering is only available to the lead for that team.
+- Plan approval is exposed through the `team_approve_plan` tool, not a dedicated `/team` HTTP route.
+- Steering works best when paired with `team_status`, `team_inbox`, and `team_collect` so the lead can react to current state instead of guessing.
+
+---
+
+## Related docs
+
+- [Agent Teams](/docs/agent-teams)
+- [Worktrees](/docs/worktrees)
+- [TUI](/docs/tui)
+- [Server](/docs/server)
+- [Tools](/docs/tools)
