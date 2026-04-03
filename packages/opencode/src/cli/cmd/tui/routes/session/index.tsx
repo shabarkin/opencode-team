@@ -299,7 +299,12 @@ export function Session() {
     const state = sync.data.session_status?.[route.sessionID]
     if (state?.type !== "busy") return
     evt.preventDefault()
-    sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+    sdk
+      .fetch(`${sdk.url}/session/${route.sessionID}/abort`, {
+        method: "POST",
+        headers: { "x-opencode-session": route.sessionID },
+      })
+      .catch(() => {})
   })
 
   useKeyboard((evt) => {
@@ -591,7 +596,14 @@ export function Session() {
       },
       onSelect: async (dialog) => {
         const status = sync.data.session_status?.[route.sessionID]
-        if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+        if (status?.type !== "idle") {
+          await sdk
+            .fetch(`${sdk.url}/session/${route.sessionID}/abort`, {
+              method: "POST",
+              headers: { "x-opencode-session": route.sessionID },
+            })
+            .catch(() => {})
+        }
         const revert = session()?.revert?.messageID
         const message = messages().findLast((x) => (!revert || x.id < revert) && x.role === "user")
         if (!message) return

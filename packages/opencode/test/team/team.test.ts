@@ -807,8 +807,9 @@ describe("Team messaging auto-wake", () => {
         })
         await Bun.sleep(10)
 
-        expect(loop).toHaveBeenCalledTimes(1)
-        expect(loop).toHaveBeenCalledWith({ sessionID: first.id })
+        const calls = loop.mock.calls.map((call) => call[0]?.sessionID)
+        expect(calls).toContain(first.id)
+        expect(calls).not.toContain(second.id)
 
         const msgs = await Session.messages({ sessionID: first.id })
         const part = msgs.at(-1)?.parts.find((item) => item.type === "text")

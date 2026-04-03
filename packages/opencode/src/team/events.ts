@@ -84,6 +84,14 @@ export const ExecutionStatus = z.enum([
 ])
 export type ExecutionStatus = z.infer<typeof ExecutionStatus>
 
+export const ACTIVE_EXECUTION = new Set<ExecutionStatus>([
+  "starting",
+  "running",
+  "cancel_requested",
+  "cancelling",
+  "completing",
+])
+
 export const MergeStatus = z.enum(["pending", "skipped", "merged", "conflict"])
 export type MergeStatus = z.infer<typeof MergeStatus>
 

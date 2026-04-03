@@ -2,6 +2,7 @@ import fs from "fs/promises"
 import path from "path"
 import { Global } from "../global"
 import { Log } from "../util/log"
+import { git as runGit } from "../util/git"
 
 const log = Log.create({ service: "team.worktree" })
 
@@ -25,19 +26,11 @@ function exists(target: string) {
 }
 
 async function git(cwd: string, args: string[]) {
-  const proc = Bun.spawn(["git", "-C", cwd, ...args], {
-    stdout: "pipe",
-    stderr: "pipe",
-  })
-  const [stdout, stderr, exitCode] = await Promise.all([
-    new Response(proc.stdout).text(),
-    new Response(proc.stderr).text(),
-    proc.exited,
-  ])
+  const result = await runGit(args, { cwd })
   return {
-    exitCode,
-    stdout: stdout.trim(),
-    stderr: stderr.trim(),
+    exitCode: result.exitCode,
+    stdout: result.stdout.toString().trim(),
+    stderr: result.stderr.toString().trim(),
   }
 }
 

@@ -36,8 +36,7 @@ import { useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv"
 import { useTextareaKeybindings } from "../textarea-keybindings"
 import { DialogSkill } from "../dialog-skill"
-
-const ACTIVE = new Set(["starting", "running", "cancel_requested", "cancelling", "completing"])
+import { ACTIVE_EXECUTION } from "@/team/events"
 
 export type PromptProps = {
   sessionID?: string
@@ -84,7 +83,7 @@ export function Prompt(props: PromptProps) {
     if (!info || info.role !== "lead") return 0
     return info.members.filter((m) => {
       if (m.status === "shutdown") return false
-      return ACTIVE.has(m.execution_status)
+      return ACTIVE_EXECUTION.has(m.execution_status)
     }).length
   })
   const history = usePromptHistory()
@@ -246,9 +245,18 @@ export function Prompt(props: PromptProps) {
           if (status().type === "idle" && teamBusy() > 0) {
             const info = team()
             for (const member of info?.members ?? []) {
-              if (ACTIVE.has(member.execution_status)) {
-                if (!member.sessionID) continue
-                sdk.client.session.abort({ sessionID: member.sessionID }).catch(() => {})
+              if (ACTIVE_EXECUTION.has(member.execution_status)) {
+                if (!member.sessionID || !info) continue
+                sdk
+                  .fetch(`${sdk.url}/team/${info.teamName}/cancel`, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "x-opencode-session": props.sessionID,
+                    },
+                    body: JSON.stringify({ member: member.name }),
+                  })
+                  .catch(() => {})
               }
             }
             dialog.clear()
@@ -262,8 +270,9 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            sdk.client.session.abort({
-              sessionID: props.sessionID,
+            sdk.fetch(`${sdk.url}/session/${props.sessionID}/abort`, {
+              method: "POST",
+              headers: { "x-opencode-session": props.sessionID },
             })
             setStore("interrupt", 0)
           }
@@ -662,9 +671,8 @@ export function Prompt(props: PromptProps) {
       try {
         const res = await sdk.fetch(`${sdk.url}/session/${sessionID}/team-message`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", "x-opencode-session": sessionID },
           body: JSON.stringify({
-            agent: local.agent.current().name,
             to,
             text: inputText,
           }),

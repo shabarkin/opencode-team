@@ -2,10 +2,10 @@ import z from "zod"
 import { Tool } from "./tool"
 import { MemberPhase, Team, TeamTasks } from "../team"
 import { Inbox } from "../team/inbox"
+import { ACTIVE_EXECUTION } from "../team/events"
 
 const NOISE_MIN = 5
 const NOISE_AGE = 15 * 60 * 1000
-const ACTIVE_EXEC = new Set(["starting", "running", "cancel_requested", "cancelling", "completing"])
 const ACTIVE_PHASE = new Set(["researching", "implementing", "testing", "waiting_approval"])
 const DONE_TASK = new Set(["completed", "cancelled"])
 
@@ -17,7 +17,7 @@ function active(
   tasks: Awaited<ReturnType<typeof TeamTasks.list>>,
 ) {
   if (member.status === "busy" || member.status === "paused") return true
-  if (member.execution_status && ACTIVE_EXEC.has(member.execution_status)) return true
+  if (member.execution_status && ACTIVE_EXECUTION.has(member.execution_status)) return true
   if (member.phase && ACTIVE_PHASE.has(member.phase)) return true
   return tasks.some((task) => task.assignee === member.name && task.status === "in_progress")
 }

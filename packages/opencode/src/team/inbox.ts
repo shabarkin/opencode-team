@@ -90,20 +90,37 @@ function serialize(messages: InboxMessage[]) {
   return messages.map((msg) => JSON.stringify(msg)).join("\n") + "\n"
 }
 
+const cache = new Map<string, { content: string; messages: InboxMessage[]; invalid: string[] }>()
+
+function remember(target: string, content: string, parsed: { messages: InboxMessage[]; invalid: string[] }) {
+  cache.set(target, { content, messages: parsed.messages, invalid: parsed.invalid })
+  return parsed
+}
+
+function parsed(target: string, content: string) {
+  const hit = cache.get(target)
+  if (hit?.content === content) {
+    return { messages: hit.messages, invalid: hit.invalid }
+  }
+  return remember(target, content, inspect(content))
+}
+
 async function repair(teamName: string, agentName: string, target: string, content: string) {
-  const parsed = inspect(content)
-  if (parsed.invalid.length === 0) return parsed
+  const next = parsed(target, content)
+  if (next.invalid.length === 0) return next
   const qpath = quarantinepath(teamName, agentName)
   await fs.mkdir(path.dirname(target), { recursive: true })
-  await fs.appendFile(qpath, parsed.invalid.join("\n") + "\n")
-  await Bun.write(target, serialize(parsed.messages))
+  await fs.appendFile(qpath, next.invalid.join("\n") + "\n")
+  const clean = serialize(next.messages)
+  await Bun.write(target, clean)
+  remember(target, clean, { messages: next.messages, invalid: [] })
   log.warn("inbox validated", {
     teamName,
     agentName,
-    valid: parsed.messages.length,
-    invalid: parsed.invalid.length,
+    valid: next.messages.length,
+    invalid: next.invalid.length,
   })
-  return parsed
+  return { messages: next.messages, invalid: [] }
 }
 
 export namespace Inbox {
@@ -123,7 +140,10 @@ export namespace Inbox {
       log.info("duplicate inbox write skipped", { teamName, to, from: message.from, id: message.id })
       return
     }
-    await fs.appendFile(target, JSON.stringify({ ...message, read: false }) + "\n")
+    const next = [...parsed.messages, { ...message, read: false }]
+    const data = JSON.stringify({ ...message, read: false }) + "\n"
+    await fs.appendFile(target, data)
+    remember(target, content + data, { messages: next, invalid: [] })
     log.info("inbox write", { teamName, to, from: message.from, id: message.id })
   }
 
@@ -146,7 +166,7 @@ export namespace Inbox {
     const content = await Bun.file(target)
       .text()
       .catch(() => "")
-    return inspect(content).messages.filter((m) => !m.read)
+    return parsed(target, content).messages.filter((m) => !m.read)
   }
 
   /**
@@ -158,7 +178,7 @@ export namespace Inbox {
     const content = await Bun.file(target)
       .text()
       .catch(() => "")
-    return inspect(content).messages
+    return parsed(target, content).messages
   }
 
   /**
@@ -185,7 +205,9 @@ export namespace Inbox {
     const seen = new Set(read.map((msg) => msg.id))
     const next = messages.map((msg) => (seen.has(msg.id) ? { ...msg, read: true } : msg))
     // Rewrite entire file with updated read flags
-    await Bun.write(target, serialize(next))
+    const data = serialize(next)
+    await Bun.write(target, data)
+    remember(target, data, { messages: next, invalid: [] })
     log.info("inbox marked read", { teamName, agentName, count: read.length })
     await Bus.publish(TeamEvent.MessageRead, { teamName, agentName, count: read.length })
     return read
@@ -197,6 +219,7 @@ export namespace Inbox {
   export async function remove(teamName: string, agentName: string): Promise<void> {
     const target = filepath(teamName, agentName)
     const qpath = quarantinepath(teamName, agentName)
+    cache.delete(target)
     await fs.unlink(target).catch(() => {})
     await fs.unlink(qpath).catch(() => {})
   }
@@ -241,7 +264,9 @@ export namespace Inbox {
     const removed = messages.length - final.length
     if (removed === 0) return 0
 
-    await Bun.write(target, serialize(final))
+    const data = serialize(final)
+    await Bun.write(target, data)
+    remember(target, data, { messages: final, invalid: [] })
     log.info("inbox pruned", { teamName, agentName, removed, remaining: final.length })
 
     await Bus.publish(TeamEvent.InboxPruned, { teamName, agentName, removed })

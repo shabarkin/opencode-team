@@ -13,6 +13,8 @@ const log = Log.create({ service: "server" })
 export function redact(event: { type: string; properties: Record<string, unknown> }) {
   if (!event.type.startsWith("team.")) return event
 
+  const teamName = typeof event.properties.teamName === "string" ? event.properties.teamName : undefined
+
   switch (event.type) {
     case "team.created": {
       const team = event.properties.team as { name?: string; members?: unknown[]; delegate?: boolean } | undefined
@@ -76,8 +78,107 @@ export function redact(event: { type: string; properties: Record<string, unknown
       }
     case "team.file.conflict":
       return { type: event.type, properties: { teamName: event.properties.teamName } }
+    case "team.member.status":
+    case "team.member.execution":
+      return {
+        type: event.type,
+        properties: {
+          teamName,
+          memberName: event.properties.memberName,
+          status: event.properties.status,
+        },
+      }
+    case "team.task.claimed":
+      return {
+        type: event.type,
+        properties: {
+          teamName,
+          taskId: event.properties.taskId,
+          memberName: event.properties.memberName,
+        },
+      }
+    case "team.shutdown.request":
+      return {
+        type: event.type,
+        properties: {
+          teamName,
+          memberName: event.properties.memberName,
+        },
+      }
+    case "team.result.submitted": {
+      const result = event.properties.result as { title?: string; status?: string } | undefined
+      return {
+        type: event.type,
+        properties: {
+          teamName,
+          memberName: event.properties.memberName,
+          title: result?.title,
+          status: result?.status,
+          taskId: event.properties.taskId,
+        },
+      }
+    }
+    case "team.message.undelivered":
+      return {
+        type: event.type,
+        properties: {
+          teamName,
+          from: event.properties.from,
+          to: event.properties.to,
+          messageID: event.properties.messageID,
+        },
+      }
+    case "team.message.read":
+      return {
+        type: event.type,
+        properties: {
+          teamName,
+          agentName: event.properties.agentName,
+          count: event.properties.count,
+        },
+      }
+    case "team.all-members-shutdown":
+      return {
+        type: event.type,
+        properties: {
+          teamName,
+          grace: event.properties.grace,
+          cleanupAt: event.properties.cleanupAt,
+        },
+      }
+    case "team.member.timeout":
+      return {
+        type: event.type,
+        properties: {
+          teamName,
+          memberName: event.properties.memberName,
+          elapsed: event.properties.elapsed,
+          limit: event.properties.limit,
+        },
+      }
+    case "team.inbox.pruned":
+      return {
+        type: event.type,
+        properties: {
+          teamName,
+          agentName: event.properties.agentName,
+          removed: event.properties.removed,
+        },
+      }
+    case "team.phase.changed":
+      return {
+        type: event.type,
+        properties: {
+          teamName,
+          phase: event.properties.phase,
+          previous: event.properties.previous,
+        },
+      }
     default:
-      return event
+      return {
+        type: event.type,
+        properties: teamName ? { teamName } : {},
+      }
   }
 }
 

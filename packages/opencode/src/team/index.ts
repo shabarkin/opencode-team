@@ -159,6 +159,91 @@ const TraceSchema = z.object({
 })
 type Trace = z.infer<typeof TraceSchema>
 
+const SessionMetaSchema = z.object({
+  name: MemberNameSchema,
+  teamName: TeamNameSchema,
+  agent: z.string(),
+  model: z.string().optional(),
+  prompt: z.string().optional(),
+})
+type SessionMeta = z.infer<typeof SessionMetaSchema>
+
+type Link = {
+  teamName: string
+  role: "lead" | "member"
+  memberName?: string
+}
+
+const cache = Instance.state(() => ({
+  links: new Map<string, Link>(),
+  traces: new Map<string, Trace>(),
+  hydrated: false,
+}))
+
+function memberKey(sessionID: string): string[] {
+  return ["team_member", Instance.project.id, sessionID]
+}
+
+function indexTeam(team: Pick<TeamInfo, "name" | "leadSessionID" | "members">) {
+  cache().links.set(team.leadSessionID, { teamName: team.name, role: "lead" })
+  for (const member of team.members) {
+    cache().links.set(member.sessionID, { teamName: team.name, role: "member", memberName: member.name })
+  }
+}
+
+function dropTeam(team: Pick<TeamInfo, "leadSessionID" | "members">) {
+  cache().links.delete(team.leadSessionID)
+  for (const member of team.members) {
+    cache().links.delete(member.sessionID)
+  }
+}
+
+async function hydrateLinks() {
+  const state = cache()
+  if (state.hydrated) return
+  state.links.clear()
+  for (const team of await Team.list()) {
+    indexTeam(team)
+  }
+  state.hydrated = true
+}
+
+async function resolveLink(sessionID: string, hit: Link) {
+  const team = await Team.get(hit.teamName)
+  if (!team) {
+    cache().links.delete(sessionID)
+    return
+  }
+  if (hit.role === "lead") {
+    if (team.leadSessionID === sessionID) return { team, role: "lead" as const }
+    cache().links.delete(sessionID)
+    return
+  }
+  if (!hit.memberName) {
+    cache().links.delete(sessionID)
+    return
+  }
+  const member = team.members.find((item: TeamMember) => item.name === hit.memberName && item.sessionID === sessionID)
+  if (member) return { team, role: "member" as const, memberName: hit.memberName }
+  cache().links.delete(sessionID)
+}
+
+async function writeSessionMeta(sessionID: string, meta: SessionMeta) {
+  await Storage.write(memberKey(sessionID), SessionMetaSchema.parse(meta))
+}
+
+async function readSessionMeta(sessionID: string): Promise<SessionMeta | undefined> {
+  try {
+    return SessionMetaSchema.parse(await Storage.read<SessionMeta>(memberKey(sessionID)))
+  } catch {
+    return undefined
+  }
+}
+
+async function removeSessionMeta(sessionID: string) {
+  await Storage.remove(memberKey(sessionID)).catch(() => undefined)
+}
+
 function watchKey(name: string) {
   return `${Instance.project.id}:${name}`
 }
@@ -274,15 +359,11 @@ function timeout(teamName: string, name: string, sessionID: string) {
   }, SHUTDOWN_TIMEOUT)
 }
 
-function systemId() {
-  return `im_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
-}
-
 async function noticeLead(teamName: string, text: string, priority: "normal" | "urgent" = "urgent") {
   const { Inbox } = await import("./inbox")
   const { TeamMessaging } = await import("./messaging")
   await Inbox.write(teamName, "lead", {
-    id: systemId(),
+    id: `im_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
     from: "system",
     text,
     timestamp: Date.now(),
@@ -297,7 +378,7 @@ async function noticeLead(teamName: string, text: string, priority: "normal" | "
     type: "system",
     priority,
   }).catch(() => undefined)
-  await TeamMessaging.flush(teamName, "lead").catch(() => undefined)
+  void TeamMessaging.flush(teamName, "lead").catch(() => undefined)
 }
 
 const MEMBER_TRANSITIONS: Record<MemberStatus, MemberStatus[]> = {
@@ -412,7 +493,12 @@ async function childPermission(sessionID: string, rules: Rule[]) {
   const { Session } = await import("../session")
   const { SessionID } = await import("../session/schema")
   const session = await Session.get(SessionID.make(sessionID)).catch(() => undefined)
-  return [...rules, ...((session?.permission ?? []).filter((rule) => rule.action === "deny") as Rule[])]
+  return [
+    ...rules,
+    ...((session?.permission ?? []).filter(
+      (rule) => rule.action === "deny" && rule.pattern !== DELEGATE_PATTERN,
+    ) as Rule[]),
+  ]
 }
 
 async function stopped(sessionID: string) {
@@ -433,7 +519,7 @@ function canTransition<T extends string>(current: T, next: T, map: Record<T, T[]
   return map[current]?.includes(next) === true
 }
 
-function sessionMeta(text: string) {
+function sessionMeta(text: string): SessionMeta | undefined {
   const head = text.match(/You are "([^"]+)", a teammate in team "([^"]+)"\./)
   if (!head) return
   const member = MemberNameSchema.safeParse(head[1])
@@ -615,6 +701,7 @@ export namespace Team {
 
       await Storage.write(configKey(input.name), team)
       await Storage.write(tasksKey(input.name), [] as TeamTask[])
+      indexTeam(team)
 
       log.info("team created", { name: input.name, leadSessionID: input.leadSessionID })
       await Bus.publish(TeamEvent.Created, { team })
@@ -678,6 +765,7 @@ export namespace Team {
     })
 
     log.info("member added", { teamName, member: next.name, agent: next.agent })
+    cache().links.set(next.sessionID, { teamName, role: "member", memberName: next.name })
     await Bus.publish(TeamEvent.MemberSpawned, { teamName, member: next })
   }
 
@@ -958,18 +1046,25 @@ export namespace Team {
   }
 
   export async function setTrace(sessionID: string, trace: Trace): Promise<void> {
-    await Storage.write(traceKey(sessionID), TraceSchema.parse(trace))
+    const next = TraceSchema.parse(trace)
+    cache().traces.set(sessionID, next)
+    await Storage.write(traceKey(sessionID), next)
   }
 
   export async function trace(sessionID: string): Promise<Trace | undefined> {
+    const hit = cache().traces.get(sessionID)
+    if (hit) return hit
     try {
-      return TraceSchema.parse(await Storage.read<Trace>(traceKey(sessionID)))
+      const next = TraceSchema.parse(await Storage.read<Trace>(traceKey(sessionID)))
+      cache().traces.set(sessionID, next)
+      return next
     } catch {
       return undefined
     }
   }
 
   export async function clearTrace(sessionID: string): Promise<void> {
+    cache().traces.delete(sessionID)
     await Storage.remove(traceKey(sessionID)).catch(() => {})
   }
 
@@ -1084,12 +1179,18 @@ export namespace Team {
    * Remove a member from a team.
    */
   export async function removeMember(teamName: string, memberName: string): Promise<void> {
+    let sessionID: string | undefined
     try {
       await Storage.update<TeamInfo>(configKey(teamName), (draft) => {
+        sessionID = draft.members.find((m) => m.name === memberName)?.sessionID
         draft.members = draft.members.filter((m) => m.name !== memberName)
       })
     } catch {
       // Team not found — ignore
+    }
+    if (sessionID) {
+      cache().links.delete(sessionID)
+      await removeSessionMeta(sessionID)
     }
     log.info("member removed", { teamName, memberName })
   }
@@ -1100,13 +1201,12 @@ export namespace Team {
   export async function findBySession(
     sessionID: string,
   ): Promise<{ team: TeamInfo; role: "lead" | "member"; memberName?: string } | undefined> {
-    const teams = await list()
-    for (const team of teams) {
-      if (team.leadSessionID === sessionID) return { team, role: "lead" }
-      const member = team.members.find((m) => m.sessionID === sessionID)
-      if (member) return { team, role: "member", memberName: member.name }
-    }
-    return undefined
+    const hit = cache().links.get(sessionID)
+    if (hit) return await resolveLink(sessionID, hit)
+    await hydrateLinks()
+    const next = cache().links.get(sessionID)
+    if (!next) return undefined
+    return await resolveLink(sessionID, next)
   }
 
   /**
@@ -1120,6 +1220,17 @@ export namespace Team {
     messages: Array<{ info: { role: string; model?: { providerID: string; modelID: string } } }>
   }): Promise<{ providerID: string; modelID: string } | { error: string }> {
     const { Provider } = await import("../provider/provider")
+    const { ProviderID, ModelID } = await import("../provider/schema")
+
+    async function known(model: { providerID: string; modelID: string }) {
+      try {
+        await Provider.getModel(ProviderID.make(model.providerID), ModelID.make(model.modelID))
+        return true
+      } catch (e: unknown) {
+        if (Provider.ModelNotFoundError.isInstance(e)) return false
+        throw e
+      }
+    }
 
     if (input.model) {
       const parsed = Provider.parseModel(input.model)
@@ -1134,9 +1245,9 @@ export namespace Team {
       }
       return parsed
     }
-    if (input.agent.model) return input.agent.model
+    if (input.agent.model && (await known(input.agent.model))) return input.agent.model
     const lastUser = input.messages.findLast((m) => m.info.role === "user")
-    if (lastUser?.info.model) return lastUser.info.model
+    if (lastUser?.info.model && (await known(lastUser.info.model))) return lastUser.info.model
     return await Provider.defaultModel()
   }
 
@@ -1322,6 +1433,13 @@ export namespace Team {
 
     // Register member — if this fails, clean up the orphaned session
     try {
+      await writeSessionMeta(session.id, {
+        name: input.name,
+        teamName: input.teamName,
+        agent: input.agent.name,
+        model: label,
+        prompt: input.prompt,
+      })
       await addMember(input.teamName, {
         name: input.name,
         sessionID: session.id,
@@ -1349,6 +1467,7 @@ export namespace Team {
       } catch {
         log.warn("failed to clean up orphaned session", { sessionID: session.id })
       }
+      await removeSessionMeta(session.id)
       if (tree) {
         await Project.removeSandbox(Inst.project.id, tree.path).catch(() => undefined)
         await TeamWorktree.remove({
@@ -2010,6 +2129,10 @@ export namespace Team {
       }
       await Storage.remove(configKey(teamName))
       await Storage.remove(tasksKey(teamName))
+      dropTeam(team)
+      for (const member of team.members) {
+        await removeSessionMeta(member.sessionID)
+      }
       budget.delete(budgetKey(teamName))
       clearWatch(teamName)
 
@@ -2086,7 +2209,7 @@ export namespace Team {
     await transitionMemberStatus(input.teamName, input.memberName, "paused")
     if (input.reason) {
       const { TeamMessaging } = await import("./messaging")
-      await TeamMessaging.send({
+      void TeamMessaging.send({
         teamName: input.teamName,
         from: "system",
         to: input.memberName,
@@ -2108,6 +2231,7 @@ export namespace Team {
       throw state(`Teammate "${input.memberName}" is ${member.status} — only paused teammates can be resumed.`)
     }
 
+    await transitionMemberStatus(input.teamName, input.memberName, "busy")
     await TeamMessaging.recoverInbox(input.teamName, input.memberName, member.sessionID)
     await TeamMessaging.send({
       teamName: input.teamName,
@@ -2115,7 +2239,6 @@ export namespace Team {
       to: input.memberName,
       text: input.redirect ?? "Resume work, review queued team messages, and continue from your latest checkpoint.",
     })
-    await transitionMemberStatus(input.teamName, input.memberName, "busy")
   }
 
   export async function pauseAll(teamName: string, reason?: string) {
@@ -2175,7 +2298,6 @@ export namespace Team {
           })
         })
       clearWatch(teamName)
-      if (delay <= 10) void run()
       watch.set(
         watchKey(teamName),
         setTimeout(() => {
@@ -2338,13 +2460,14 @@ export namespace Team {
       if (known.has(session.id)) continue
       if (!session.parentID) continue
       if (!session.title.includes(" teammate")) continue
-      const msgs = await Session.messages({ sessionID: SessionID.make(session.id), limit: 20 }).catch(() => [])
-      const text = msgs
-        .find((msg) => msg.info.role === "user")
-        ?.parts.flatMap((part) => (part.type === "text" ? [part.text] : []))
-        .join("\n")
-      if (!text) continue
-      const meta = sessionMeta(text)
+      const meta =
+        (await readSessionMeta(session.id)) ??
+        sessionMeta(
+          (await Session.messages({ sessionID: SessionID.make(session.id), limit: 20 }).catch(() => []))
+            .find((msg) => msg.info.role === "user")
+            ?.parts.flatMap((part) => (part.type === "text" ? [part.text] : []))
+            .join("\n") ?? "",
+        )
       if (!meta) continue
       let team = await get(meta.teamName)
       if (!team) {

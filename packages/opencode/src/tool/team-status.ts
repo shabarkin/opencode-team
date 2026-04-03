@@ -2,6 +2,7 @@ import z from "zod"
 import { Tool } from "./tool"
 import { Team, TeamTasks } from "../team"
 import { Inbox } from "../team/inbox"
+import { teamStatusIcon } from "../team/status-view"
 
 export const TeamStatusTool = Tool.define("team_status", {
   description:
@@ -35,7 +36,7 @@ export const TeamStatusTool = Tool.define("team_status", {
         const usage =
           m.maxCost && m.maxCost > 0 ? `${Math.round((spend / m.maxCost) * 100)}%/$${m.maxCost.toFixed(2)}` : ""
         return [
-          `  ${icon(m.status)} ${m.name}`,
+          `  ${teamStatusIcon(m.status)} ${m.name}`,
           `agent=${m.agent}`,
           `status=${m.status}`,
           `exec=${m.execution_status ?? "idle"}`,
@@ -148,25 +149,6 @@ export const TeamStatusTool = Tool.define("team_status", {
     }
   },
 })
-
-function icon(status: string): string {
-  switch (status) {
-    case "busy":
-      return "*"
-    case "paused":
-      return "||"
-    case "ready":
-      return "o"
-    case "shutdown_requested":
-      return "!"
-    case "shutdown":
-      return "x"
-    case "error":
-      return "E"
-    default:
-      return "?"
-  }
-}
 
 function money(value: number) {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(value)

@@ -7,35 +7,10 @@ import { useRouteData } from "../context/route"
 import { useRoute } from "../context/route"
 import { useToast } from "../ui/toast"
 import { useSDK } from "../context/sdk"
+import { teamStatusIcon } from "@/team/status-view"
+import { loadTeamSession } from "@/team/session-payload"
 
 type Value = { type: "member"; sessionID?: string } | { type: "task"; id: string } | { type: "request"; id: string }
-
-function statusIcon(status: string): string {
-  switch (status) {
-    case "busy":
-      return "*"
-    case "paused":
-      return "||"
-    case "ready":
-      return "o"
-    case "shutdown_requested":
-      return "!"
-    case "shutdown":
-      return "x"
-    case "completed":
-      return "+"
-    case "in_progress":
-      return ">"
-    case "blocked":
-      return "#"
-    case "cancelled":
-      return "-"
-    case "pending":
-      return " "
-    default:
-      return "?"
-  }
-}
 
 function statusColor(status: string, theme: any): string {
   switch (status) {
@@ -48,6 +23,8 @@ function statusColor(status: string, theme: any): string {
     case "shutdown_requested":
       return theme.warning
     case "shutdown":
+      return theme.error
+    case "error":
       return theme.error
     case "completed":
       return theme.success
@@ -76,27 +53,18 @@ export function DialogTeam() {
   // Refresh team data on open
   onMount(() => {
     dialog.setSize("large")
-    sdk
-      .fetch(`${sdk.url}/team/by-session/${route.sessionID}`, {
-        headers: {
-          "x-opencode-session": route.sessionID,
-        },
-      })
-      .then((r: Response) => r.json())
-      .then((data: any) => {
-        if (!data) return
-        sync.set("team", route.sessionID, {
-          teamName: data.team.name,
-          leadSessionID: data.leadSessionID,
-          role: data.role,
-          memberName: data.memberName,
-          delegate: data.team.delegate,
-          members: data.team.members ?? [],
-          pendingSpawnRequests: data.team.pending_spawn_requests ?? [],
-          tasks: data.tasks ?? [],
+    void loadTeamSession({ url: sdk.url, fetch: sdk.fetch, sessionID: route.sessionID }).then((data) => {
+      if (data === undefined) return
+      if (data === null) {
+        sync.set("team", (teams) => {
+          const next = { ...teams }
+          delete next[route.sessionID]
+          return next
         })
-      })
-      .catch(() => {})
+        return
+      }
+      sync.set("team", route.sessionID, data)
+    })
   })
 
   const options = createMemo((): DialogSelectOption<Value>[] => {
@@ -108,7 +76,7 @@ export function DialogTeam() {
       value: { type: "member", sessionID: m.sessionID },
       category: "Teammates",
       footer: `Status: ${m.status}`,
-      gutter: <text fg={statusColor(m.status, theme)}>{statusIcon(m.status)}</text>,
+      gutter: <text fg={statusColor(m.status, theme)}>{teamStatusIcon(m.status)}</text>,
       disabled: !m.sessionID,
     }))
 
@@ -123,7 +91,7 @@ export function DialogTeam() {
       ]
         .filter(Boolean)
         .join(" | "),
-      gutter: <text fg={statusColor(t.status, theme)}>{statusIcon(t.status)}</text>,
+      gutter: <text fg={statusColor(t.status, theme)}>{teamStatusIcon(t.status)}</text>,
       disabled: t.status === "completed" || t.status === "cancelled",
     }))
 

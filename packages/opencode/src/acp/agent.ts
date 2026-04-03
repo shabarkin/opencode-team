@@ -1475,7 +1475,12 @@ export namespace ACP {
           sessionID: params.sessionId,
           directory: session.cwd,
         },
-        { throwOnError: true },
+        {
+          throwOnError: true,
+          headers: {
+            "x-opencode-session": params.sessionId,
+          },
+        },
       )
     }
   }

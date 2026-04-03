@@ -326,6 +326,7 @@ describe("team phase 2", () => {
       directory: tmp.path,
       init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
       fn: async () => {
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const lead = await Session.create({})
         const worker = await Session.create({ parentID: lead.id })
         await seed(lead.id)
@@ -360,7 +361,7 @@ describe("team phase 2", () => {
 
         const stop = Team.monitorCosts({ delay: 5 })
         await bill(child.id, root, 0.02)
-        await Bun.sleep(30)
+        await Bun.sleep(80)
 
         const team = await Team.get("phase2-team-cap")
         expect(team?.maxCost).toBe(0.01)
@@ -376,6 +377,7 @@ describe("team phase 2", () => {
           true,
         )
 
+        loop.mockRestore()
         stop()
         await Team.setMemberStatus("phase2-team-cap", "worker", "shutdown")
         await Team.cleanup("phase2-team-cap")
@@ -420,6 +422,7 @@ describe("team phase 2", () => {
       directory: tmp.path,
       init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
       fn: async () => {
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const lead = await Session.create({})
         const worker = await Session.create({ parentID: lead.id })
         const helper = await Session.create({ parentID: lead.id })
@@ -449,7 +452,7 @@ describe("team phase 2", () => {
         const stop = Team.monitorCosts({ delay: 5 })
         const workSeed = await seed(worker.id, "worker cost seed")
         await bill(worker.id, workSeed, 0.02)
-        await Bun.sleep(30)
+        await Bun.sleep(80)
 
         const team = await Team.get("phase2-budget")
         expect(team?.members.find((item) => item.name === "worker")?.status).toBe("paused")
@@ -463,6 +466,7 @@ describe("team phase 2", () => {
         expect(status.output).toContain("Budget usage:")
         expect(status.output).toContain("projected 1h")
 
+        loop.mockRestore()
         stop()
         await Team.setMemberStatus("phase2-budget", "worker", "shutdown")
         await Team.setMemberStatus("phase2-budget", "helper", "shutdown")

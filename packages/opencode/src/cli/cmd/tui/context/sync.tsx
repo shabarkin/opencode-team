@@ -29,6 +29,7 @@ import { batch, onMount } from "solid-js"
 import { Log } from "@/util/log"
 import type { Path } from "@opencode-ai/sdk"
 import type { Workspace } from "@opencode-ai/sdk/v2"
+import { loadTeamSession, type TeamSessionState } from "@/team/session-payload"
 
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
@@ -75,52 +76,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       vcs: VcsInfo | undefined
       path: Path
       workspaceList: Workspace[]
-      team: {
-        [sessionID: string]: {
-          teamName: string
-          leadSessionID?: string
-          role: "lead" | "member"
-          memberName?: string
-          delegate?: boolean
-          members: Array<{
-            name: string
-            sessionID?: string
-            agent: string
-            status: "ready" | "busy" | "paused" | "shutdown_requested" | "shutdown" | "error"
-            execution_status:
-              | "idle"
-              | "starting"
-              | "running"
-              | "cancel_requested"
-              | "cancelling"
-              | "cancelled"
-              | "completing"
-              | "completed"
-              | "failed"
-              | "timed_out"
-            model?: string
-            planApproval?: "none" | "pending" | "approved" | "rejected"
-            checkpoint?: "none" | "after_each_write" | "after_each_tool"
-          }>
-          pendingSpawnRequests: Array<{
-            id: string
-            requested_by: string
-            agent: string
-            rationale?: string
-            name?: string
-            prompt?: string
-            created: number
-          }>
-          tasks: Array<{
-            id: string
-            content: string
-            status: string
-            priority: string
-            assignee?: string
-            depends_on?: string[]
-          }>
-        }
-      }
+      team: Record<string, TeamSessionState>
     }>({
       provider_next: {
         all: [],
@@ -153,35 +109,20 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
     })
 
     const sdk = useSDK()
-    const fullSyncedSessions = new Set<string>()
+    const TEAM_SYNC_LIMIT = 8
+    const fullSyncedSessions = new Map<string, number>()
 
-    function team(data: any) {
-      return {
-        teamName: data.team.name,
-        leadSessionID: data.leadSessionID,
-        role: data.role,
-        memberName: data.memberName,
-        delegate: data.team.delegate,
-        members: data.team.members ?? [],
-        pendingSpawnRequests: data.team.pending_spawn_requests ?? [],
-        tasks: data.tasks ?? [],
-      }
-    }
-
-    async function fetchTeam(sessionID: string) {
-      const res = await sdk
-        .fetch(`${sdk.url}/team/by-session/${sessionID}`, {
-          headers: {
-            "x-opencode-session": sessionID,
-          },
-        })
-        .catch(() => undefined)
-      if (!res?.ok) return undefined
-      return res.json().catch(() => undefined)
+    function watch(sessionID: string) {
+      fullSyncedSessions.delete(sessionID)
+      fullSyncedSessions.set(sessionID, Date.now())
+      if (fullSyncedSessions.size <= TEAM_SYNC_LIMIT) return
+      const oldest = fullSyncedSessions.keys().next().value
+      if (oldest) fullSyncedSessions.delete(oldest)
     }
 
     async function syncTeam(sessionID: string) {
-      const data = await fetchTeam(sessionID)
+      watch(sessionID)
+      const data = await loadTeamSession({ url: sdk.url, fetch: sdk.fetch, sessionID })
       if (data === undefined) return
       if (data === null) {
         setStore(
@@ -192,7 +133,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         )
         return
       }
-      setStore("team", sessionID, reconcile(team(data)))
+      setStore("team", sessionID, reconcile(data))
     }
 
     async function syncWorkspaces() {
@@ -449,7 +390,10 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       // Team events — payloads are SSE-redacted, so refetch open session team state.
       const raw = event as any
       if (typeof raw.type === "string" && raw.type.startsWith("team.")) {
-        for (const sessionID of fullSyncedSessions) {
+        const teamName = typeof raw.properties?.teamName === "string" ? raw.properties.teamName : undefined
+        for (const sessionID of fullSyncedSessions.keys()) {
+          const info = store.team[sessionID]
+          if (teamName && info && info.teamName !== teamName) continue
           void syncTeam(sessionID)
         }
       }
@@ -590,9 +534,17 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               draft.session_diff[sessionID] = diff.data ?? []
             }),
           )
-          fullSyncedSessions.add(sessionID)
+          watch(sessionID)
 
           void syncTeam(sessionID)
+        },
+      },
+      team: {
+        get(sessionID: string) {
+          return store.team[sessionID]
+        },
+        async sync(sessionID: string) {
+          await syncTeam(sessionID)
         },
       },
       workspace: {

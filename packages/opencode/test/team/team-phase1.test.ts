@@ -4,6 +4,7 @@ import { Env } from "../../src/env"
 import { Log } from "../../src/util/log"
 import { Session } from "../../src/session"
 import { SessionPrompt } from "../../src/session/prompt"
+import { SessionStatus } from "../../src/session/status"
 import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { ProviderID, ModelID } from "../../src/provider/schema"
 import { Team } from "../../src/team"
@@ -172,6 +173,7 @@ describe("team phase 1", () => {
       directory: tmp.path,
       init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
       fn: async () => {
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
         await seed(lead.id)
@@ -201,7 +203,6 @@ describe("team phase 1", () => {
         expect(requestID).toBeTruthy()
         expect((await Team.listSpawnRequests("phase1-request")).map((item) => item.id)).toContain(requestID)
 
-        const spawn = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const spawnTool = await TeamSpawnTool.init()
         const approved = await spawnTool.execute(
           {
@@ -217,7 +218,7 @@ describe("team phase 1", () => {
         const team = await Team.get("phase1-request")
         expect(team?.members.some((item) => item.name === "scout")).toBe(true)
 
-        spawn.mockRestore()
+        loop.mockRestore()
         await Team.setMemberStatus("phase1-request", "worker", "shutdown")
         await Team.setMemberStatus("phase1-request", "scout", "shutdown")
         await Team.cleanup("phase1-request")
@@ -284,6 +285,7 @@ describe("team phase 1", () => {
       directory: tmp.path,
       init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
       fn: async () => {
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const trigger = spyOn(Plugin, "trigger").mockImplementation(async (name, _input, output) => {
           if (name === "team.message.sending") {
             ;(output as { text: string }).text = `[hook] ${(output as { text: string }).text}`
@@ -342,9 +344,12 @@ describe("team phase 1", () => {
         expect(shutdown.title).toBe("Shutdown blocked")
         expect(shutdown.output).toContain("Shutdown denied by test policy")
 
+        const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "idle" } as any)
+        loop.mockRestore()
         trigger.mockRestore()
         await Team.setMemberStatus("phase1-policy", "worker", "shutdown")
         await Team.cleanup("phase1-policy")
+        status.mockRestore()
       },
     })
   })

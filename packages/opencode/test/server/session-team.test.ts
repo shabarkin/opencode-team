@@ -113,6 +113,7 @@ describe("session team routes", () => {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
+            "x-opencode-session": lead,
           },
           body: JSON.stringify({ to: "worker-a", text: "please check this" }),
         })
@@ -156,6 +157,9 @@ describe("session team routes", () => {
         const app = SessionRoutes()
         const res = await app.request(`/${lead}/abort`, {
           method: "POST",
+          headers: {
+            "x-opencode-session": lead,
+          },
         })
 
         expect(res.status).toBe(200)
@@ -163,6 +167,62 @@ describe("session team routes", () => {
 
         const team = await Team.get("abort-team")
         expect(team?.members[0].execution_status).toBe("cancelling")
+      },
+    })
+  })
+
+  test("team-message requires a matching caller session", async () => {
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const lead = (await Session.create({})).id
+        const member = (await Session.create({ parentID: lead })).id
+        await seed(lead, "lead")
+        await seed(member, "member")
+        await Team.create({ name: "msg-team-auth", leadSessionID: lead })
+        await Team.addMember("msg-team-auth", {
+          name: "worker-a",
+          sessionID: member,
+          agent: "general",
+          status: "ready",
+        })
+
+        const app = SessionRoutes()
+        const res = await app.request(`/${lead}/team-message`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": member,
+          },
+          body: JSON.stringify({ to: "worker-a", text: "please check this" }),
+        })
+
+        expect(res.status).toBe(403)
+        expect(await Inbox.unread("msg-team-auth", "worker-a")).toHaveLength(0)
+      },
+    })
+  })
+
+  test("abort requires a matching caller session", async () => {
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const lead = (await Session.create({})).id
+        const other = (await Session.create({})).id
+
+        const app = SessionRoutes()
+        const res = await app.request(`/${lead}/abort`, {
+          method: "POST",
+          headers: {
+            "x-opencode-session": other,
+          },
+        })
+
+        expect(res.status).toBe(403)
       },
     })
   })

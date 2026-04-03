@@ -322,6 +322,44 @@ describe("session.prompt agent hints", () => {
       else process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = prev
     }
   })
+
+  test("does not switch to team hints for generic team wording", async () => {
+    const prev = process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+    process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+
+    try {
+      await using tmp = await tmpdir({ git: true })
+
+      await Instance.provide({
+        directory: tmp.path,
+        fn: async () => {
+          const session = await Session.create({})
+          const msg = await SessionPrompt.prompt({
+            sessionID: session.id,
+            noReply: true,
+            parts: await SessionPrompt.resolvePromptParts(
+              "Ask @general to summarize what our team learned from the latest CI failures.",
+            ),
+          })
+
+          if (msg.info.role !== "user") throw new Error("expected user message")
+
+          const text = msg.parts
+            .filter((part) => part.type === "text" && part.synthetic)
+            .map((part) => (part.type === "text" ? part.text : ""))
+            .join("\n")
+
+          expect(text).toContain("call the task tool with subagent: general")
+          expect(text).not.toContain("team_create/team_spawn")
+
+          await Session.remove(session.id)
+        },
+      })
+    } finally {
+      if (prev === undefined) delete process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+      else process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = prev
+    }
+  })
 })
 
 describe("session.prompt steer", () => {

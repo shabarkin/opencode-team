@@ -1,7 +1,8 @@
-import { Hono, type Context } from "hono"
+import { Hono } from "hono"
 import { stream } from "hono/streaming"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import { SessionID, MessageID, PartID } from "@/session/schema"
+import { MemberNameSchema } from "@/team/events"
 import z from "zod"
 import { Session } from "../../session"
 import { MessageV2 } from "../../session/message-v2"
@@ -19,24 +20,16 @@ import { PermissionID } from "@/permission/schema"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { errors } from "../error"
 import { lazy } from "../../util/lazy"
+import { caller } from "./caller"
 
 const log = Log.create({ service: "server" })
 const TeamMessage = z.object({
-  to: z.string(),
-  text: z.string(),
-  agent: z.string().optional(),
+  to: z.union([z.literal("lead"), MemberNameSchema]),
+  text: z.string().max(10 * 1024),
 })
 const SessionSteer = z.object({
   text: z.string(),
 })
-
-function caller(c: Context) {
-  const raw = c.req.header("x-opencode-session")
-  if (!raw) return
-  const result = SessionID.zod.safeParse(raw)
-  if (!result.success) return
-  return result.data
-}
 
 export const SessionRoutes = lazy(() =>
   new Hono()
@@ -396,6 +389,7 @@ export const SessionRoutes = lazy(() =>
       ),
       async (c) => {
         const sessionID = c.req.valid("param").sessionID
+        if (caller(c) !== sessionID) return c.json({ error: "Forbidden" }, 403)
         await SessionPrompt.cancel(sessionID)
 
         try {
@@ -469,6 +463,7 @@ export const SessionRoutes = lazy(() =>
       validator("json", TeamMessage),
       async (c) => {
         const sessionID = c.req.valid("param").sessionID
+        if (caller(c) !== sessionID) return c.json({ error: "Forbidden" }, 403)
         const body = c.req.valid("json")
         const { Team } = await import("@/team")
         const { TeamMessaging } = await import("@/team/messaging")

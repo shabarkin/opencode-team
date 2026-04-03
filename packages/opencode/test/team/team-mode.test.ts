@@ -7,7 +7,7 @@ import { Permission } from "../../src/permission"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Session } from "../../src/session"
 import { SessionPrompt } from "../../src/session/prompt"
-import { Team, WRITE_TOOLS } from "../../src/team"
+import { DELEGATE_PATTERN, Team, WRITE_TOOLS, addDelegateRules } from "../../src/team"
 import { TeamMessaging } from "../../src/team/messaging"
 import { tmpdir } from "../fixture/fixture"
 
@@ -45,6 +45,39 @@ async function finish(name: string) {
 }
 
 describe("team mode", () => {
+  test("delegate mode keeps teammate execution tools enabled", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({ permission: addDelegateRules([]) })
+        await seed(lead.id)
+        await Team.create({ name: "delegate-mode", leadSessionID: lead.id, delegate: true })
+
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
+        const out = await Team.spawnMember({
+          teamName: "delegate-mode",
+          name: "worker",
+          parentSessionID: lead.id,
+          agent: { name: "general" },
+          model: { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" },
+          prompt: "Implement the fix.",
+          planApproval: false,
+          checkpoint: "none",
+        })
+
+        const session = await Session.get(SessionID.make(out.sessionID))
+        expect(session.permission?.some((rule) => rule.pattern === DELEGATE_PATTERN)).toBe(false)
+        expect(Permission.evaluate("edit", "src/index.ts", session.permission ?? []).action).not.toBe("deny")
+        expect(Permission.evaluate("bash", "git status", session.permission ?? []).action).not.toBe("deny")
+
+        loop.mockRestore()
+        await finish("delegate-mode")
+      },
+    })
+  })
+
   test("research mode denies write tools and stores the member mode", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({

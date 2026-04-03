@@ -63,7 +63,12 @@ IMPORTANT:
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
-const TEAM_HINT = /\b(team|teams|teammate|teammates|delegate|delegated|delegation|orchestrate|orchestrator)\b/i
+const TEAM_HINT = [
+  /\b(agent team|team of agents|team of teammates|multiple agents|multiple teammates|teammates?)\b/i,
+  /\bdelegate(?:d|s|ion)?\b.*\b(agent|agents|teammate|teammates|task|work)\b/i,
+  /\b(orchestrate|orchestrator|coordinate)\b.*\b(agent|agents|team|teammate|teammates)\b/i,
+  /\bspawn\b.*\b(agent|teammate|teammates)\b/i,
+]
 
 export namespace SessionPrompt {
   const log = Log.create({ service: "session.prompt" })
@@ -229,7 +234,7 @@ export namespace SessionPrompt {
 
   function wantsTeam(parts: PromptInput["parts"]) {
     if (!Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS) return false
-    return parts.some((part) => part.type === "text" && TEAM_HINT.test(part.text))
+    return parts.some((part) => part.type === "text" && TEAM_HINT.some((pattern) => pattern.test(part.text)))
   }
 
   export const prompt = fn(PromptInput, async (input) => {

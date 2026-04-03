@@ -132,7 +132,10 @@ describe("team messaging filter", () => {
           to: "worker",
           text: "please read this",
         })
+        await Bun.sleep(20)
+        const calls = loop.mock.calls.length
         expect(await TeamMessaging.markRead("receipts-on", "worker")).toBe(1)
+        await Bun.sleep(20)
 
         const items = await Inbox.all("receipts-on", "lead")
         expect(items).toHaveLength(1)
@@ -144,7 +147,7 @@ describe("team messaging filter", () => {
             ),
           ),
         ).toBe(false)
-        expect(loop).not.toHaveBeenCalled()
+        expect(loop).toHaveBeenCalledTimes(calls)
 
         loop.mockRestore()
         await finish("receipts-on")

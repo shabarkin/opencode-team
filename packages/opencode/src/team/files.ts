@@ -28,6 +28,7 @@ const edits = new Map<string, FileEdit[]>()
 const warns = new Map<string, number>()
 const SEP = "\u0000"
 const SHARED = "shared"
+let sweeps = 0
 
 /** Conflict window: edits within this period trigger a warning (5 minutes) */
 const CONFLICT_WINDOW = 5 * 60 * 1000
@@ -50,6 +51,14 @@ function recent(list: FileEdit[], now: number) {
   return list.filter((edit) => now - edit.timestamp < CONFLICT_WINDOW)
 }
 
+function sweep(now: number) {
+  for (const [id, list] of edits) {
+    if (recent(list, now).length > 0) continue
+    edits.delete(id)
+    warns.delete(id)
+  }
+}
+
 /**
  * Subscribe to file.edited events and detect file conflicts.
  * Called during bootstrap when OPENCODE_EXPERIMENTAL_AGENT_TEAMS is enabled.
@@ -65,6 +74,8 @@ export function initFileTracking(): () => void {
     if (info.role !== "member" || !info.memberName) return
 
     const now = Date.now()
+    sweeps += 1
+    if (sweeps % 64 === 0) sweep(now)
     const teamName = info.team.name
     const editor = info.memberName
     const team = info.team
