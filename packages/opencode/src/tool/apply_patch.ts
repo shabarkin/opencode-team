@@ -13,6 +13,7 @@ import { LSP } from "../lsp"
 import { Filesystem } from "../util/filesystem"
 import DESCRIPTION from "./apply_patch.txt"
 import { File } from "../file"
+import { permPath } from "./perm"
 
 const PatchParams = z.object({
   patchText: z.string().describe("The full patch text that describes all changes to be made"),
@@ -172,7 +173,7 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
     }))
 
     // Check permissions if needed
-    const relativePaths = fileChanges.map((c) => path.relative(Instance.worktree, c.filePath).replaceAll("\\", "/"))
+    const relativePaths = fileChanges.map((c) => permPath(c.filePath))
     await ctx.ask({
       permission: "edit",
       patterns: relativePaths,
@@ -242,13 +243,13 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
     // Generate output summary
     const summaryLines = fileChanges.map((change) => {
       if (change.type === "add") {
-        return `A ${path.relative(Instance.worktree, change.filePath).replaceAll("\\", "/")}`
+        return `A ${permPath(change.filePath)}`
       }
       if (change.type === "delete") {
-        return `D ${path.relative(Instance.worktree, change.filePath).replaceAll("\\", "/")}`
+        return `D ${permPath(change.filePath)}`
       }
       const target = change.movePath ?? change.filePath
-      return `M ${path.relative(Instance.worktree, target).replaceAll("\\", "/")}`
+      return `M ${permPath(target)}`
     })
     let output = `Success. Updated the following files:\n${summaryLines.join("\n")}`
 
@@ -264,7 +265,7 @@ export const ApplyPatchTool = Tool.define("apply_patch", {
         const limited = errors.slice(0, MAX_DIAGNOSTICS_PER_FILE)
         const suffix =
           errors.length > MAX_DIAGNOSTICS_PER_FILE ? `\n... and ${errors.length - MAX_DIAGNOSTICS_PER_FILE} more` : ""
-        output += `\n\nLSP errors detected in ${path.relative(Instance.worktree, target).replaceAll("\\", "/")}, please fix:\n<diagnostics file="${target}">\n${limited.map(LSP.Diagnostic.pretty).join("\n")}${suffix}\n</diagnostics>`
+        output += `\n\nLSP errors detected in ${permPath(target)}, please fix:\n<diagnostics file="${target}">\n${limited.map(LSP.Diagnostic.pretty).join("\n")}${suffix}\n</diagnostics>`
       }
     }
 

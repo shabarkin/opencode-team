@@ -15,6 +15,8 @@ type Conflict = {
   files: string[]
 }
 
+export type Action = "merge" | "continue" | "abort" | "mark_resolved"
+
 export type Result = {
   merged: string[]
   skipped: string[]
@@ -61,6 +63,10 @@ function mergeable(member: TeamMember) {
   return ["ready", "shutdown", "error"].includes(member.status)
 }
 
+function mergeMsg(teamName: string, memberName: string) {
+  return `merge(team): ${teamName}/${memberName}`
+}
+
 async function exists(dir: string) {
   return fs
     .stat(dir)
@@ -102,6 +108,25 @@ async function files(dir: string) {
     .filter(Boolean)
 }
 
+async function merging(dir: string) {
+  return (await git(dir, ["rev-parse", "--verify", "MERGE_HEAD"])).exitCode === 0
+}
+
+function conflict(team: TeamInfo, name?: string) {
+  if (name) return team.members.find((member) => member.name === name && member.worktreeBranch)
+  const list = team.members.filter((member) => member.mergeStatus === "conflict" && member.worktreeBranch)
+  if (list.length > 1) throw new Error("Multiple teammate conflicts are recorded. Resolve them one at a time.")
+  return list[0]
+}
+
+async function merged(teamName: string, member: TeamMember) {
+  await update(teamName, member.name, {
+    mergeStatus: "merged",
+    mergeError: undefined,
+    mergedAt: Date.now(),
+  })
+}
+
 async function finalize(teamName: string, member: TeamMember) {
   if (!member.worktreePath) return
   if (!(await exists(member.worktreePath))) return
@@ -131,12 +156,11 @@ async function mergeOne(teamName: string, repoDir: string, member: TeamMember) {
     return { kind: "skipped" as const }
   }
 
-  const merged = await git(repoDir, ["merge", "--no-ff", "--no-commit", member.worktreeBranch!])
-  if (merged.exitCode !== 0) {
+  const result = await git(repoDir, ["merge", "--no-ff", "--no-commit", member.worktreeBranch!])
+  if (result.exitCode !== 0) {
     const list = await files(repoDir)
     if (list.length) {
-      await git(repoDir, ["merge", "--abort"])
-      const error = msg(merged) || `Merge conflict for ${member.name}.`
+      const error = msg(result) || `Merge conflict for ${member.name}.`
       await update(teamName, member.name, {
         mergeStatus: "conflict",
         mergeError: [error, ...list].join("\n"),
@@ -150,25 +174,115 @@ async function mergeOne(teamName: string, repoDir: string, member: TeamMember) {
         },
       }
     }
-    throw new Error(msg(merged) || `Failed to merge ${member.name}.`)
+    throw new Error(msg(result) || `Failed to merge ${member.name}.`)
   }
 
-  const committed = await git(repoDir, ["commit", "-m", `merge(team): ${teamName}/${member.name}`], commitEnv())
+  const committed = await git(repoDir, ["commit", "-m", mergeMsg(teamName, member.name)], commitEnv())
   if (committed.exitCode !== 0) {
     await git(repoDir, ["merge", "--abort"])
     throw new Error(msg(committed) || `Failed to commit merge for ${member.name}.`)
   }
 
-  await update(teamName, member.name, {
-    mergeStatus: "merged",
-    mergeError: undefined,
-    mergedAt: Date.now(),
-  })
+  await merged(teamName, member)
   return { kind: "merged" as const }
 }
 
+async function continued(team: TeamInfo, repoDir: string, memberName?: string): Promise<Result> {
+  const member = conflict(team, memberName)
+  if (!member?.worktreeBranch) {
+    throw new Error(
+      memberName
+        ? `Teammate "${memberName}" does not have a recorded merge conflict.`
+        : "No conflicted teammate merge is in progress.",
+    )
+  }
+
+  if (!(await merging(repoDir))) {
+    if ((await ahead(repoDir, member.worktreeBranch)) === 0) {
+      await merged(team.name, member)
+      return { merged: [member.name], skipped: [], conflicts: [], pending: [] }
+    }
+    throw new Error(`No merge is in progress for "${member.name}". Rerun team_merge or use action=mark_resolved.`)
+  }
+
+  const list = await files(repoDir)
+  if (list.length > 0) {
+    throw new Error(`Merge for "${member.name}" still has unresolved files: ${list.join(", ")}.`)
+  }
+
+  const committed = await git(repoDir, ["commit", "-m", mergeMsg(team.name, member.name)], commitEnv())
+  if (committed.exitCode !== 0) {
+    throw new Error(msg(committed) || `Failed to commit merge for ${member.name}.`)
+  }
+
+  await merged(team.name, member)
+  return { merged: [member.name], skipped: [], conflicts: [], pending: [] }
+}
+
+async function aborted(team: TeamInfo, repoDir: string, memberName?: string): Promise<Result> {
+  const member = conflict(team, memberName)
+  if (!(await merging(repoDir))) {
+    return { merged: [], skipped: [], conflicts: [], pending: member?.name ? [member.name] : [] }
+  }
+
+  const result = await git(repoDir, ["merge", "--abort"])
+  if (result.exitCode !== 0) {
+    throw new Error(msg(result) || "Failed to abort merge.")
+  }
+
+  return { merged: [], skipped: [], conflicts: [], pending: member?.name ? [member.name] : [] }
+}
+
+async function marked(team: TeamInfo, repoDir: string, memberName?: string): Promise<Result> {
+  const member = conflict(team, memberName)
+  if (!member?.worktreeBranch) {
+    throw new Error(
+      memberName
+        ? `Teammate "${memberName}" does not have a mergeable worktree branch.`
+        : "Choose a conflicted teammate to mark resolved.",
+    )
+  }
+  if (await merging(repoDir)) {
+    throw new Error(`A merge is still in progress for "${member.name}". Use action=continue or action=abort first.`)
+  }
+  if (!(await clean(repoDir))) {
+    throw new Error(
+      "Lead workspace has uncommitted changes. Commit, stash, or clean it before marking a merge resolved.",
+    )
+  }
+
+  if ((await ahead(repoDir, member.worktreeBranch)) !== 0) {
+    const result = await git(
+      repoDir,
+      ["merge", "-s", "ours", "--no-ff", "-m", mergeMsg(team.name, member.name), member.worktreeBranch],
+      commitEnv(),
+    )
+    if (result.exitCode !== 0) {
+      throw new Error(msg(result) || `Failed to record resolved merge for ${member.name}.`)
+    }
+  }
+
+  await merged(team.name, member)
+  return { merged: [member.name], skipped: [], conflicts: [], pending: [] }
+}
+
 export namespace TeamMerge {
-  export async function merge(input: { team: TeamInfo; repoDir: string; memberName?: string }): Promise<Result> {
+  export async function merge(input: {
+    team: TeamInfo
+    repoDir: string
+    memberName?: string
+    action?: Action
+  }): Promise<Result> {
+    const action = input.action ?? "merge"
+    if (action === "continue") return continued(input.team, input.repoDir, input.memberName)
+    if (action === "abort") return aborted(input.team, input.repoDir, input.memberName)
+    if (action === "mark_resolved") return marked(input.team, input.repoDir, input.memberName)
+
+    if (await merging(input.repoDir)) {
+      throw new Error(
+        "A teammate merge is already in progress. Resolve it, then use team_merge with action=continue or action=abort.",
+      )
+    }
     if (!(await clean(input.repoDir))) {
       throw new Error("Lead workspace has uncommitted changes. Commit, stash, or clean it before team_merge.")
     }
@@ -220,11 +334,11 @@ export namespace TeamMerge {
       break
     }
 
-    const merged = new Set([...result.merged, ...result.skipped, ...result.conflicts.map((item) => item.name)])
+    const mergedNames = new Set([...result.merged, ...result.skipped, ...result.conflicts.map((item) => item.name)])
     const rest = list
       .filter((member) => member.worktreeBranch)
       .map((member) => member.name)
-      .filter((name) => !merged.has(name))
+      .filter((name) => !mergedNames.has(name))
     result.pending.push(...rest.filter((name) => !result.pending.includes(name)))
     return result
   }

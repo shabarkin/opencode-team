@@ -95,7 +95,7 @@ For a worktree team, teammate spawn does the following:
 1. Verify the lead directory is a git repo.
 2. Create a unique branch named like `team/<team>/<member>`.
 3. Create a worktree under OpenCode's data directory.
-4. Register that worktree as a project sandbox.
+4. Add a session-level `external_directory` allow rule for that worktree.
 5. Start the teammate session inside that directory.
 
 If worktree creation is unavailable, the fork falls back to the shared project directory and logs a warning.
@@ -120,13 +120,13 @@ If a name already exists, the helper retries with a generated suffix.
 
 ## Worktree architecture
 
-| Area | Files |
-| ---- | ----- |
-| Creation and removal | `packages/opencode/src/team/worktree.ts` |
-| Merge orchestration | `packages/opencode/src/team/merge.ts` |
-| Team spawn integration | `packages/opencode/src/team/index.ts` |
-| Tool entry points | `packages/opencode/src/tool/team.ts` |
-| Test coverage | `packages/opencode/test/team/team-worktree.test.ts`, `packages/opencode/test/team/team-merge.test.ts`, `packages/opencode/test/team/team-files.test.ts` |
+| Area                   | Files                                                                                                                                                   |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Creation and removal   | `packages/opencode/src/team/worktree.ts`                                                                                                                |
+| Merge orchestration    | `packages/opencode/src/team/merge.ts`                                                                                                                   |
+| Team spawn integration | `packages/opencode/src/team/index.ts`                                                                                                                   |
+| Tool entry points      | `packages/opencode/src/tool/team.ts`                                                                                                                    |
+| Test coverage          | `packages/opencode/test/team/team-worktree.test.ts`, `packages/opencode/test/team/team-merge.test.ts`, `packages/opencode/test/team/team-files.test.ts` |
 
 ### Flow diagram
 
@@ -163,7 +163,10 @@ For each eligible teammate:
 3. If there are no changes, mark the merge as `skipped`.
 4. If there are changes, run a normal git merge into the lead branch.
 5. On success, record `merged`.
-6. On conflict, abort the merge, record the conflict, and stop cleanup.
+6. On conflict, leave the merge in progress, record the conflict, and stop cleanup.
+7. Resolve the files normally, then run `team_merge` with `action=continue`.
+8. If you abandon the in-progress merge, run `team_merge` with `action=abort`.
+9. If you manually ported the changes and committed them separately, run `team_merge` with `action=mark_resolved` to record branch ancestry without replaying the diff.
 
 ### Merge diagram
 
@@ -173,7 +176,7 @@ teammate worktree
   ├─ ahead of lead? no → skipped
   └─ ahead of lead? yes
        ├─ merge succeeds → merged
-       └─ merge conflicts → abort, mark conflict, resolve manually, rerun team_merge
+       └─ merge conflicts → leave conflict state, resolve + team_merge(action=continue)
 ```
 
 ---
@@ -199,9 +202,9 @@ Merged branches remain in the lead branch history.
 
 ## Shared-directory teams vs worktree teams
 
-| Mode | Benefits | Trade-offs |
-| ---- | -------- | ---------- |
-| Shared directory | Simpler, no merge step, easier for small review teams | More risk of overlapping edits in the same tree |
+| Mode               | Benefits                                                                                          | Trade-offs                                                                         |
+| ------------------ | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Shared directory   | Simpler, no merge step, easier for small review teams                                             | More risk of overlapping edits in the same tree                                    |
 | Isolated worktrees | Stronger filesystem isolation, explicit merge boundary, easier to reason about teammate ownership | Requires git repo support, explicit merge workflow, possible later merge conflicts |
 
 ---

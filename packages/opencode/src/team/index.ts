@@ -47,6 +47,7 @@ import { TeamPolicy } from "./policy"
 import { MessageV2 } from "../session/message-v2"
 import { TeamScope } from "./scope"
 import { TEAM_LEAD_ONLY_IDS, TEAM_MEMBER_ALLOWED_IDS } from "../tool/team-ids"
+import { permGlob, permPath } from "../tool/perm"
 
 export {
   TeamEvent,
@@ -279,7 +280,7 @@ function absoluteRule(dir: string, input: string) {
 }
 
 function relativeRule(dir: string, input: string) {
-  return rulePath(path.relative(dir, path.resolve(dir, input)) || ".")
+  return permPath(path.resolve(dir, input), { dir, root: Instance.worktree })
 }
 
 function scopeRules(scope: TeamScopeType | undefined, dir: string): Rule[] {
@@ -1403,6 +1404,13 @@ export namespace Team {
       })),
     ]
     rules.push(...scopeRules(scope, tree?.path ?? Inst.directory))
+    if (tree) {
+      rules.push({
+        permission: "external_directory",
+        pattern: permGlob(tree.path),
+        action: "allow",
+      })
+    }
     if (input.mode === "research") {
       rules.push(...lockRules("*:research-mode"))
     }
@@ -2042,6 +2050,7 @@ export namespace Team {
   export async function merge(
     teamName: string,
     memberName?: string,
+    action?: "merge" | "continue" | "abort" | "mark_resolved",
   ): Promise<{
     merged: string[]
     skipped: string[]
@@ -2053,6 +2062,7 @@ export namespace Team {
     if (!team.worktrees) throw new Error(`Team "${teamName}" is not using worktrees.`)
     const { TeamMerge } = await import("./merge")
     return TeamMerge.merge({
+      action,
       team,
       repoDir: await leadDir(team.leadSessionID),
       memberName,

@@ -123,6 +123,8 @@ Any directory allowed here inherits the same defaults as the current workspace. 
 
 Keep the list focused on trusted paths, and layer extra allow or deny rules as needed for other tools (for example `bash`).
 
+In this fork, teammate sessions created in isolated worktree mode also add a session-level `external_directory` allow for their own worktree automatically. That keeps normal teammate edits and shell work inside the teammate checkout from repeatedly prompting for external-directory approval.
+
 ---
 
 ## Available Permissions

@@ -145,7 +145,7 @@ export const TeamCreateTool = Tool.define("team_create", {
           ? "Shutdown guard enabled: teammates with in-progress tasks must submit a result before shutdown."
           : "",
         team.worktrees
-          ? "WORKTREES MODE: teammates get isolated git worktrees. Use team_merge before team_cleanup."
+          ? "WORKTREES MODE: teammates get isolated git worktrees. Use team_merge to merge, continue, abort, or mark resolved before team_cleanup."
           : "",
         "",
         "LEAD ROLE (while this team is active):",
@@ -174,7 +174,7 @@ export const TeamCreateTool = Tool.define("team_create", {
         "  team_approve_plan — Approve a teammate's plan (if plan mode)",
         "  team_shutdown_all — Request shutdown for every active teammate",
         "  team_shutdown     — Gracefully stop a teammate",
-        "  team_merge        — Merge teammate worktree branches into the lead branch",
+        "  team_merge        — Merge worktrees or continue/abort/mark a conflict resolved",
         "  team_cleanup      — Remove team resources (after merge + shutdown)",
         "",
         "CRITICAL WORKFLOW:",
@@ -186,7 +186,9 @@ export const TeamCreateTool = Tool.define("team_create", {
         "6. Do NOT produce final output while any teammate is still working or mid-review",
         "7. Only shut teammates down after reviews are complete, or if repeated error/noise is overwhelming the channel",
         "8. Deliver ONE consolidated synthesis, then shut down the team",
-        team.worktrees ? "9. For worktree teams: team_merge → verify/tests → team_cleanup" : "",
+        team.worktrees
+          ? "9. For worktree teams: team_merge (merge/continue/abort/mark_resolved) → verify/tests → team_cleanup"
+          : "",
         "",
         "DELIVERY DISCIPLINE:",
         "- Produce ONE consolidated synthesis after team_collect returns",
@@ -201,7 +203,7 @@ export const TeamCreateTool = Tool.define("team_create", {
           : "",
         "",
         team.worktrees
-          ? "Lifecycle: spawn → work → shutdown → team_merge → verify → cleanup"
+          ? "Lifecycle: spawn → work → shutdown → team_merge → resolve/continue if needed → verify → cleanup"
           : "Lifecycle: spawn → work → shutdown → cleanup (auto if all shutdown)",
         params.tasks?.length ? `\nInitial tasks: ${params.tasks.length}` : "",
       ]
@@ -984,10 +986,11 @@ export const TeamMergeTool = Tool.define("team_merge", {
   description:
     "Merge teammate worktree branches into the lead session's current branch using normal git merges. " +
     "Use this only for teams created in worktree mode. Teammates should usually be ready, shut down, or errored before merging. " +
-    "If a merge conflict happens, the merge is aborted for that teammate and cleanup must wait for manual resolution.",
+    "Use action=continue to finish a resolved conflict, action=abort to cancel an in-progress merge, or action=mark_resolved after manually porting changes and committing them.",
   parameters: z.object({
     name: TeamNameSchema.describe("Team name to merge"),
     member: MemberNameSchema.optional().describe("Optional single teammate to merge"),
+    action: z.enum(["merge", "continue", "abort", "mark_resolved"]).optional().describe("Merge action to run"),
   }),
   async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
     const info = await Team.findBySession(ctx.sessionID)
@@ -1000,9 +1003,10 @@ export const TeamMergeTool = Tool.define("team_merge", {
     }
 
     try {
-      const result = await Team.merge(params.name, params.member)
+      const action = params.action ?? "merge"
+      const result = await Team.merge(params.name, params.member, action)
       const lines = [
-        `Merged worktrees for team "${params.name}".`,
+        `${action === "merge" ? "Merged" : action === "continue" ? "Continued" : action === "abort" ? "Aborted" : "Recorded"} worktrees for team "${params.name}".`,
         result.merged.length ? `Merged: ${result.merged.join(", ")}` : "Merged: none",
         result.skipped.length ? `Skipped: ${result.skipped.join(", ")}` : "Skipped: none",
         result.pending.length ? `Pending: ${result.pending.join(", ")}` : "Pending: none",
@@ -1011,7 +1015,7 @@ export const TeamMergeTool = Tool.define("team_merge", {
         lines.push(
           "Conflicts:",
           ...result.conflicts.map((item) => `- ${item.name}: ${item.files.join(", ") || item.error}`),
-          "Resolve the conflict, then rerun team_merge before team_cleanup.",
+          "Resolve the conflict, stage the files, then run team_merge with action=continue. Use action=abort to cancel the in-progress merge or action=mark_resolved after a manual port.",
         )
       }
       return {

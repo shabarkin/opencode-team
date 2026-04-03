@@ -3,6 +3,7 @@ import fs from "fs/promises"
 import path from "path"
 import { Env } from "../../src/env"
 import { Global } from "../../src/global"
+import { Permission } from "../../src/permission"
 import { Instance } from "../../src/project/instance"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Session } from "../../src/session"
@@ -10,6 +11,7 @@ import { SessionPrompt } from "../../src/session/prompt"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Team } from "../../src/team"
 import { TeamWorktree } from "../../src/team/worktree"
+import { permPath } from "../../src/tool/perm"
 import { Log } from "../../src/util/log"
 import { tmpdir } from "../fixture/fixture"
 
@@ -206,6 +208,109 @@ describe("team worktree", () => {
         expect(await exists(member!.worktreePath!)).toBe(true)
         await Team.merge("worktree-spawn")
         await Team.cleanup("worktree-spawn")
+      },
+    })
+  })
+
+  test("spawnMember grants external_directory allow for the teammate worktree", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({})
+        await seed(lead.id)
+        await Team.create({ name: "worktree-ext", leadSessionID: lead.id, worktrees: true })
+
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
+        const spawned = await Team.spawnMember({
+          teamName: "worktree-ext",
+          name: "worker",
+          parentSessionID: lead.id,
+          agent: { name: "general" },
+          model: { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" },
+          prompt: "Inspect the repo.",
+          planApproval: false,
+          checkpoint: "none",
+        })
+
+        await Bun.sleep(20)
+
+        const session = await Session.get(SessionID.make(spawned.sessionID))
+        const team = await Team.get("worktree-ext")
+        const member = team?.members.find((item) => item.name === "worker")
+        expect(
+          Permission.evaluate(
+            "external_directory",
+            path.join(member!.worktreePath!, "note.txt"),
+            session.permission ?? [],
+          ).action,
+        ).toBe("allow")
+
+        loop.mockRestore()
+        await Team.setMemberStatus("worktree-ext", "worker", "shutdown")
+        await Team.merge("worktree-ext")
+        await Team.cleanup("worktree-ext")
+      },
+    })
+  })
+
+  test("spawnMember scope rules match teammate worktree edit paths", async () => {
+    await using tmp = await tmpdir({
+      git: true,
+      config: {
+        permission: {
+          edit: "ask",
+        },
+      },
+    })
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({})
+        await seed(lead.id)
+        await Team.create({ name: "worktree-scope", leadSessionID: lead.id, worktrees: true })
+
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
+        const spawned = await Team.spawnMember({
+          teamName: "worktree-scope",
+          name: "worker",
+          parentSessionID: lead.id,
+          agent: { name: "general" },
+          model: { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" },
+          prompt: "Inspect the repo.",
+          planApproval: false,
+          checkpoint: "none",
+          scope: {
+            path_includes: ["note.txt"],
+          },
+        })
+
+        await Bun.sleep(20)
+
+        const session = await Session.get(SessionID.make(spawned.sessionID))
+        expect(
+          Permission.evaluate(
+            "edit",
+            permPath(path.join(session.directory, "note.txt"), { dir: session.directory, root: tmp.path }),
+            session.permission ?? [],
+          ).action,
+        ).toBe("allow")
+        expect(
+          Permission.evaluate(
+            "edit",
+            permPath(path.join(session.directory, "other.txt"), { dir: session.directory, root: tmp.path }),
+            session.permission ?? [],
+          ).action,
+        ).toBe("deny")
+
+        loop.mockRestore()
+        await Team.setMemberStatus("worktree-scope", "worker", "shutdown")
+        await git(tmp.path, ["add", "-A"])
+        await git(tmp.path, ["commit", "-m", "test setup"])
+        await Team.merge("worktree-scope")
+        await Team.cleanup("worktree-scope")
       },
     })
   })

@@ -126,10 +126,88 @@ describe("team merge", () => {
         expect(a?.mergeStatus).toBe("merged")
         expect(b?.mergeStatus).toBe("conflict")
         expect(b?.mergeError).toContain("note.txt")
-        expect(await Bun.file(path.join(tmp.path, "note.txt")).text()).toBe("first\n")
-        expect((await git(tmp.path, ["diff", "--name-only", "--diff-filter=U"])).stdout).toBe("")
+        expect(await Bun.file(path.join(tmp.path, "note.txt")).text()).toContain("<<<<<<< HEAD")
+        expect((await git(tmp.path, ["diff", "--name-only", "--diff-filter=U"])).stdout).toBe("note.txt")
+        expect((await git(tmp.path, ["rev-parse", "--verify", "MERGE_HEAD"])).exitCode).toBe(0)
         expect(await fs.stat(first.path).then(() => true)).toBe(true)
         expect(await fs.stat(second.path).then(() => true)).toBe(true)
+      },
+    })
+  })
+
+  test("merge continue commits a resolved conflict", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await fs.writeFile(path.join(tmp.path, "note.txt"), "base\n")
+    await git(tmp.path, ["add", "note.txt"])
+    await git(tmp.path, ["commit", "-m", "add note"])
+
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({})
+        await Team.create({ name: "merge-continue", leadSessionID: lead.id, worktrees: true })
+        const first = await member(tmp.path, "merge-continue", "first")
+        const second = await member(tmp.path, "merge-continue", "second")
+        await fs.writeFile(path.join(first.path, "note.txt"), "first\n")
+        await fs.writeFile(path.join(second.path, "note.txt"), "second\n")
+
+        const result = await Team.merge("merge-continue")
+        expect(result.conflicts).toHaveLength(1)
+
+        await fs.writeFile(path.join(tmp.path, "note.txt"), "resolved\n")
+        await git(tmp.path, ["add", "note.txt"])
+
+        const next = await Team.merge("merge-continue", undefined, "continue")
+        const team = await Team.get("merge-continue")
+        const secondMember = team?.members.find((item) => item.name === "second")
+
+        expect(next.merged).toEqual(["second"])
+        expect(next.conflicts).toEqual([])
+        expect(secondMember?.mergeStatus).toBe("merged")
+        expect(await Bun.file(path.join(tmp.path, "note.txt")).text()).toBe("resolved\n")
+        expect((await git(tmp.path, ["rev-parse", "--verify", "MERGE_HEAD"])).exitCode).not.toBe(0)
+        expect((await git(tmp.path, ["log", "--format=%s", "-1"])).stdout).toBe("merge(team): merge-continue/second")
+      },
+    })
+  })
+
+  test("merge abort clears conflict state and mark_resolved records ancestry after manual port", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await fs.writeFile(path.join(tmp.path, "note.txt"), "base\n")
+    await git(tmp.path, ["add", "note.txt"])
+    await git(tmp.path, ["commit", "-m", "add note"])
+
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      fn: async () => {
+        const lead = await Session.create({})
+        await Team.create({ name: "merge-manual", leadSessionID: lead.id, worktrees: true })
+        const first = await member(tmp.path, "merge-manual", "first")
+        const second = await member(tmp.path, "merge-manual", "second")
+        await fs.writeFile(path.join(first.path, "note.txt"), "first\n")
+        await fs.writeFile(path.join(second.path, "note.txt"), "second\n")
+
+        const result = await Team.merge("merge-manual")
+        expect(result.conflicts).toHaveLength(1)
+
+        await Team.merge("merge-manual", "second", "abort")
+        expect((await git(tmp.path, ["rev-parse", "--verify", "MERGE_HEAD"])).exitCode).not.toBe(0)
+
+        await fs.writeFile(path.join(tmp.path, "note.txt"), "ported\n")
+        await git(tmp.path, ["add", "note.txt"])
+        await git(tmp.path, ["commit", "-m", "manual port second"])
+
+        const next = await Team.merge("merge-manual", "second", "mark_resolved")
+        const team = await Team.get("merge-manual")
+        const secondMember = team?.members.find((item) => item.name === "second")
+
+        expect(next.merged).toEqual(["second"])
+        expect(next.conflicts).toEqual([])
+        expect(secondMember?.mergeStatus).toBe("merged")
+        expect(await Bun.file(path.join(tmp.path, "note.txt")).text()).toBe("ported\n")
+        expect((await git(tmp.path, ["log", "--format=%P", "-1"])).stdout.split(" ")).toHaveLength(2)
       },
     })
   })
