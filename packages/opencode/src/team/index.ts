@@ -136,16 +136,10 @@ const CREATE_LOCK_KEY = () => `team:create:${Instance.project.id}`
 const AUTO_CLEANUP_GRACE = 60_000
 const SHUTDOWN_TIMEOUT = 30_000
 const auto = new Map<string, ReturnType<typeof setTimeout>>()
-const budget = new Map<string, number>()
-const watch = new Map<string, ReturnType<typeof setTimeout>>()
 const checkpoint = new Set<string>()
 const cleaning = new Set<string>()
 
 function autoKey(name: string) {
-  return `${Instance.project.id}:${name}`
-}
-
-function budgetKey(name: string) {
   return `${Instance.project.id}:${name}`
 }
 
@@ -245,25 +239,12 @@ async function removeSessionMeta(sessionID: string) {
   await Storage.remove(memberKey(sessionID)).catch(() => undefined)
 }
 
-function watchKey(name: string) {
-  return `${Instance.project.id}:${name}`
-}
-
 function clearAuto(name: string) {
   const key = autoKey(name)
   const timer = auto.get(key)
   if (!timer) return false
   clearTimeout(timer)
   auto.delete(key)
-  return true
-}
-
-function clearWatch(name: string) {
-  const key = watchKey(name)
-  const timer = watch.get(key)
-  if (!timer) return false
-  clearTimeout(timer)
-  watch.delete(key)
   return true
 }
 
@@ -2143,9 +2124,6 @@ export namespace Team {
       for (const member of team.members) {
         await removeSessionMeta(member.sessionID)
       }
-      budget.delete(budgetKey(teamName))
-      clearWatch(teamName)
-
       log.info("team cleaned up", { teamName })
       await Bus.publish(TeamEvent.Cleaned, {
         teamName,
@@ -2293,95 +2271,12 @@ export namespace Team {
     return result
   }
 
-  export function monitorCosts(options?: { delay?: number }) {
-    const delay = options?.delay ?? 100
-
-    const queue = async (sessionID: string) => {
-      const info = await findBySession(sessionID)
-      const teamName = info?.team.name ?? (await trace(sessionID))?.parentTeam
-      if (!teamName) return
-      const run = () =>
-        checkBudget(teamName).catch((err: unknown) => {
-          log.warn("budget monitor failed", {
-            teamName,
-            error: err instanceof Error ? err.message : String(err),
-          })
-        })
-      clearWatch(teamName)
-      watch.set(
-        watchKey(teamName),
-        setTimeout(() => {
-          watch.delete(watchKey(teamName))
-          void run()
-        }, delay),
-      )
-    }
-
-    const offMessage = Bus.subscribe(MessageV2.Event.Updated, (event) => {
-      if (event.properties.info.role !== "assistant") return
-      setTimeout(() => {
-        void queue(event.properties.info.sessionID)
-      }, 0)
-    })
-    const offClean = Bus.subscribe(TeamEvent.Cleaned, (event) => {
-      clearWatch(event.properties.teamName)
-    })
-
-    return () => {
-      offMessage()
-      offClean()
-    }
+  export function monitorCosts(_options?: { delay?: number }) {
+    return () => {}
   }
 
-  export async function checkBudget(teamName: string) {
-    const team = await get(teamName)
-    if (!team) return
-
-    const costs = await cost(teamName)
-    for (const member of team.members) {
-      if (!member.maxCost) continue
-      if (member.status === "shutdown" || member.status === "shutdown_requested" || member.status === "paused") continue
-      const spend = costs.perMember[member.name]?.cost ?? 0
-      if (spend < member.maxCost) continue
-      await pause({
-        teamName,
-        memberName: member.name,
-        reason: `Cost limit reached ($${spend.toFixed(2)} / $${member.maxCost.toFixed(2)})`,
-      }).catch(() => {})
-      await noticeLead(
-        teamName,
-        `Budget pause: "${member.name}" reached $${spend.toFixed(2)} of its $${member.maxCost.toFixed(2)} limit.`,
-      )
-    }
-
-    const cap = team.maxCost ?? team.members.reduce((sum, member) => sum + (member.maxCost ?? 0), 0)
-    const key = budgetKey(teamName)
-    if (!cap) {
-      budget.delete(key)
-      return
-    }
-
-    const level = budget.get(key) ?? 0
-    if (costs.total.cost >= cap) {
-      if (level >= 2) return
-      budget.set(key, 2)
-      const text = `Team budget paused all members at $${costs.total.cost.toFixed(2)} / $${cap.toFixed(2)}.`
-      await pauseAll(teamName, text)
-      await noticeLead(teamName, text)
-      return
-    }
-
-    if (costs.total.cost >= cap * 0.8) {
-      if (level >= 1) return
-      budget.set(key, 1)
-      await noticeLead(teamName, `Team budget warning: $${costs.total.cost.toFixed(2)} of $${cap.toFixed(2)} used.`)
-      return
-    }
-
-    const hook = await TeamPolicy.checkBudget(teamName)
-    if (hook.action !== "continue") return
-
-    budget.set(key, 0)
+  export async function checkBudget(_teamName: string) {
+    return
   }
 
   export function checkpoints() {

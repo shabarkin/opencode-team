@@ -59,10 +59,6 @@ export const TeamCreateTool = Tool.define("team_create", {
           "(team_*, read, glob, grep, list). The lead cannot write, edit, or run bash commands. " +
           "Use this when you want the lead to focus entirely on orchestration.",
       ),
-    max_cost: z
-      .number()
-      .optional()
-      .describe("Optional team-wide budget cap in USD. Default warnings fire at 80% and auto-pause at 100%."),
     receipts: z
       .boolean()
       .optional()
@@ -106,7 +102,6 @@ export const TeamCreateTool = Tool.define("team_create", {
       leadSessionID: ctx.sessionID,
       delegate: params.delegate,
       collect_strict: params.collect_strict,
-      maxCost: params.max_cost,
       require_result_before_shutdown: params.require_result_before_shutdown,
       receipts: params.receipts,
       worktrees: Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES,
@@ -140,7 +135,6 @@ export const TeamCreateTool = Tool.define("team_create", {
         params.collect_strict
           ? "Strict collection enabled: team_collect now requires fresh structured results by default."
           : "",
-        params.max_cost ? `Team budget cap: $${params.max_cost.toFixed(2)}.` : "",
         params.require_result_before_shutdown
           ? "Shutdown guard enabled: teammates with in-progress tasks must submit a result before shutdown."
           : "",
@@ -213,7 +207,6 @@ export const TeamCreateTool = Tool.define("team_create", {
         teamName: params.name,
         delegate: !!params.delegate,
         collectStrict: !!params.collect_strict,
-        maxCost: params.max_cost,
         requireResultBeforeShutdown: !!params.require_result_before_shutdown,
         worktrees: team.worktrees === true,
       },
@@ -268,10 +261,6 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
         .number()
         .optional()
         .describe("Maximum execution time in minutes. Teammate is auto-cancelled when exceeded. Default: no limit."),
-      max_cost: z
-        .number()
-        .optional()
-        .describe("Optional per-member cost limit in USD. The teammate is auto-paused when this is exceeded."),
       require_plan_approval: z
         .boolean()
         .optional()
@@ -410,7 +399,6 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
         checkpoint: params.checkpoint ?? "none",
         resultDeadline: params.result_deadline,
         timeout: params.timeout,
-        maxCost: params.max_cost,
         scope:
           params.path_excludes || params.path_includes || params.bash_allowlist
             ? {
@@ -447,7 +435,6 @@ export const TeamSpawnTool = Tool.define("team_spawn", async () => {
           params.mode === "research" ? "Research mode enabled: this teammate is read-only." : "",
           (params.checkpoint ?? "none") !== "none" ? `Checkpoint mode enabled: ${params.checkpoint ?? "none"}.` : "",
           params.result_deadline ? `Result deadline: ${params.result_deadline} minute(s).` : "",
-          params.max_cost ? `Cost limit: $${params.max_cost.toFixed(2)}.` : "",
           "",
           "The teammate is now working in the background.",
           "Stay in LEAD MODE while this team is active: keep orchestrating, avoid taking this task back yourself,",

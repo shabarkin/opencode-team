@@ -7,7 +7,7 @@ import { teamStatusIcon } from "../team/status-view"
 export const TeamStatusTool = Tool.define("team_status", {
   description:
     "Get a comprehensive snapshot of the current team state including all members, " +
-    "their status, the task board, unread message counts, and cost estimates. " +
+    "their status, the task board, unread message counts, and spend summaries. " +
     "Use this as the lead's primary monitoring tool before making coordination decisions, reassigning work, or collecting results.",
   parameters: z.object({}),
   async execute(_params, ctx): Promise<{ title: string; output: string; metadata: Record<string, any> }> {
@@ -24,7 +24,6 @@ export const TeamStatusTool = Tool.define("team_status", {
     const tasks = await TeamTasks.list(team.name)
     const now = Date.now()
     const costs = await Team.cost(team.name)
-    const cap = team.maxCost ?? team.members.reduce((sum, member) => sum + (member.maxCost ?? 0), 0)
     const burn = now > team.created ? (costs.total.cost / (now - team.created)) * 60 * 60 * 1000 : 0
 
     // Member status table
@@ -33,8 +32,6 @@ export const TeamStatusTool = Tool.define("team_status", {
         const unread = await Inbox.unread(team.name, m.name).catch(() => [])
         const mins = Math.round((now - (m.started ?? m.updated ?? team.created)) / 60000)
         const spend = costs.perMember[m.name]?.cost ?? 0
-        const usage =
-          m.maxCost && m.maxCost > 0 ? `${Math.round((spend / m.maxCost) * 100)}%/$${m.maxCost.toFixed(2)}` : ""
         return [
           `  ${teamStatusIcon(m.status)} ${m.name}`,
           `agent=${m.agent}`,
@@ -51,7 +48,6 @@ export const TeamStatusTool = Tool.define("team_status", {
           m.last_result_at ? `last_result=${new Date(m.last_result_at).toISOString()}` : "",
           m.error_kind ? `error_kind=${m.error_kind}` : "",
           spend > 0 ? `cost=${money(spend)}` : "",
-          usage ? `budget=${usage}` : "",
           unread.length > 0 ? `${unread.length} unread` : "",
           `${mins}m`,
           m.status === "error" ? "→ team_restart or team_shutdown" : "",
@@ -111,20 +107,8 @@ export const TeamStatusTool = Tool.define("team_status", {
       "Costs:",
       `  total=${money(costs.total.cost)} | projected 1h=${money(burn)}`,
       `  lead=${money(costs.perMember.lead?.cost ?? 0)}`,
-      ...team.members.map((member) => {
-        const spend = costs.perMember[member.name]?.cost ?? 0
-        const usage =
-          member.maxCost && member.maxCost > 0
-            ? ` of $${member.maxCost.toFixed(2)} (${Math.round((spend / member.maxCost) * 100)}%)`
-            : ""
-        return `  ${member.name}=${money(spend)}${usage}`
-      }),
+      ...team.members.map((member) => `  ${member.name}=${money(costs.perMember[member.name]?.cost ?? 0)}`),
     )
-
-    if (cap > 0) {
-      sections.push(`Budget cap: $${cap.toFixed(2)}`)
-      sections.push(`Budget usage: ${Math.round((costs.total.cost / cap) * 100)}% of $${cap.toFixed(2)}`)
-    }
 
     const threads = await listThreads(
       team.name,

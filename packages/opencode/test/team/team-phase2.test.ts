@@ -271,7 +271,7 @@ describe("team phase 2", () => {
     })
   })
 
-  test("team_spawn forwards max_cost to the spawn workflow", async () => {
+  test("team_spawn ignores legacy max_cost input", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
@@ -294,7 +294,7 @@ describe("team phase 2", () => {
             prompt: "Review the schema",
             checkpoint: "none",
             max_cost: 1.25,
-          },
+          } as any,
           ctx(lead.id, undefined, await Session.messages({ sessionID: lead.id })),
         )
 
@@ -310,9 +310,9 @@ describe("team phase 2", () => {
           expect.objectContaining({
             teamName: "phase2-spawn",
             name: "worker",
-            maxCost: 1.25,
           }),
         )
+        expect(spawn.mock.calls[0]?.[0]).not.toHaveProperty("maxCost")
 
         spawn.mockRestore()
         await Team.cleanup("phase2-spawn")
@@ -320,27 +320,17 @@ describe("team phase 2", () => {
     })
   })
 
-  test("team_create stores a team budget cap and traced child spend triggers auto-pause", async () => {
+  test("team budget monitor is disabled for traced child spend", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
       init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
       fn: async () => {
-        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const lead = await Session.create({})
         const worker = await Session.create({ parentID: lead.id })
         await seed(lead.id)
 
-        const create = await (
-          await TeamCreateTool.init()
-        ).execute(
-          {
-            name: "phase2-team-cap",
-            max_cost: 0.01,
-          },
-          ctx(lead.id),
-        )
-        expect(create.output).toContain("Team budget cap: $0.01")
+        await (await TeamCreateTool.init()).execute({ name: "phase2-team-cap" }, ctx(lead.id))
 
         await Team.addMember("phase2-team-cap", {
           name: "worker",
@@ -359,13 +349,13 @@ describe("team phase 2", () => {
           mode: "task",
         })
 
+        const scans = spyOn(Session, "messages")
         const stop = Team.monitorCosts({ delay: 5 })
         await bill(child.id, root, 0.02)
         await Bun.sleep(80)
 
         const team = await Team.get("phase2-team-cap")
-        expect(team?.maxCost).toBe(0.01)
-        expect(team?.members.find((item) => item.name === "worker")?.status).toBe("paused")
+        expect(team?.members.find((item) => item.name === "worker")?.status).toBe("ready")
         expect(await Team.trace(child.id)).toEqual({
           parentTeam: "phase2-team-cap",
           parentMember: "worker",
@@ -373,11 +363,10 @@ describe("team phase 2", () => {
         })
 
         const leadUnread = await Inbox.unread("phase2-team-cap", "lead")
-        expect(leadUnread.some((item) => item.text.includes("paused all members") && item.text.includes("$0.02"))).toBe(
-          true,
-        )
+        expect(leadUnread).toHaveLength(0)
+        expect(scans).not.toHaveBeenCalled()
 
-        loop.mockRestore()
+        scans.mockRestore()
         stop()
         await Team.setMemberStatus("phase2-team-cap", "worker", "shutdown")
         await Team.cleanup("phase2-team-cap")
@@ -416,13 +405,12 @@ describe("team phase 2", () => {
     })
   })
 
-  test("member cost limits pause workers and team_status shows budget details", async () => {
+  test("team_status shows spend details without budget fields", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
       init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
       fn: async () => {
-        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const lead = await Session.create({})
         const worker = await Session.create({ parentID: lead.id })
         const helper = await Session.create({ parentID: lead.id })
@@ -437,7 +425,6 @@ describe("team phase 2", () => {
           status: "ready",
           checkpoint: "none",
           planApproval: "none",
-          maxCost: 0.01,
         })
         await Team.addMember("phase2-budget", {
           name: "helper",
@@ -446,28 +433,23 @@ describe("team phase 2", () => {
           status: "ready",
           checkpoint: "none",
           planApproval: "none",
-          maxCost: 1,
         })
 
-        const stop = Team.monitorCosts({ delay: 5 })
         const workSeed = await seed(worker.id, "worker cost seed")
         await bill(worker.id, workSeed, 0.02)
-        await Bun.sleep(80)
 
         const team = await Team.get("phase2-budget")
-        expect(team?.members.find((item) => item.name === "worker")?.status).toBe("paused")
+        expect(team?.members.find((item) => item.name === "worker")?.status).toBe("ready")
         expect(team?.members.find((item) => item.name === "helper")?.status).toBe("ready")
 
         const leadUnread = await Inbox.unread("phase2-budget", "lead")
-        expect(leadUnread.some((item) => item.text.includes("worker") && item.text.includes("$0.02"))).toBe(true)
+        expect(leadUnread).toHaveLength(0)
 
         const status = await (await TeamStatusTool.init()).execute({}, ctx(lead.id))
         expect(status.output).toContain("Costs:")
-        expect(status.output).toContain("Budget usage:")
         expect(status.output).toContain("projected 1h")
+        expect(status.output).not.toContain("Budget")
 
-        loop.mockRestore()
-        stop()
         await Team.setMemberStatus("phase2-budget", "worker", "shutdown")
         await Team.setMemberStatus("phase2-budget", "helper", "shutdown")
         await Team.cleanup("phase2-budget")
