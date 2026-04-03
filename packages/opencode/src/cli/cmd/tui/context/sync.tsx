@@ -30,6 +30,7 @@ import { Log } from "@/util/log"
 import type { Path } from "@opencode-ai/sdk"
 import type { Workspace } from "@opencode-ai/sdk/v2"
 import { loadTeamSession, type TeamSessionState } from "@/team/session-payload"
+import { targets } from "./team-sync"
 
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
@@ -391,11 +392,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       const raw = event as any
       if (typeof raw.type === "string" && raw.type.startsWith("team.")) {
         const teamName = typeof raw.properties?.teamName === "string" ? raw.properties.teamName : undefined
-        for (const sessionID of fullSyncedSessions.keys()) {
-          const info = store.team[sessionID]
-          if (teamName && info && info.teamName !== teamName) continue
-          void syncTeam(sessionID)
-        }
+        for (const sessionID of targets(fullSyncedSessions.keys(), store.team, teamName)) void syncTeam(sessionID)
       }
     })
 
