@@ -443,8 +443,8 @@ test("Agent.get resolves an exact custom display name", async () => {
   await Instance.provide({
     directory: tmp.path,
     fn: async () => {
-      const byKey = await Agent.get("security_hunter")
-      const byName = await Agent.get("Security Researcher Hunter")
+      const byKey = await load(tmp.path, (svc) => svc.get("security_hunter"))
+      const byName = await load(tmp.path, (svc) => svc.get("Security Researcher Hunter"))
 
       expect(byKey).toBeDefined()
       expect(byName).toBeDefined()
