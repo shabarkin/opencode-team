@@ -65,12 +65,7 @@ function sweep(now: number) {
  */
 export function initFileTracking(): () => void {
   return Bus.subscribe(File.Event.Edited, async (event) => {
-    // TODO(team): upstream PR #23244 dropped `sessionID` from File.Event.Edited
-    // (now only `{ file: string }`). Without sessionID we cannot identify the
-    // editor, so file-conflict detection is currently a no-op. Restore once
-    // the event payload regains attribution or we plumb sessionID via
-    // InstanceState.
-    const sessionID: string | undefined = (event.properties as { sessionID?: string }).sessionID
+    const sessionID = event.properties.sessionID
     const file = event.properties.file
     if (!sessionID) return
 

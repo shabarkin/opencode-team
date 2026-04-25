@@ -1,5 +1,7 @@
 import { BusEvent } from "@/bus/bus-event"
+import { Bus } from "@/bus"
 import { InstanceState } from "@/effect"
+import { SessionID } from "@/session/schema"
 
 import { AppFileSystem } from "@opencode-ai/shared/filesystem"
 import { Git } from "@/git"
@@ -72,9 +74,22 @@ export const Event = {
     "file.edited",
     Schema.Struct({
       file: Schema.String,
+      sessionID: SessionID,
     }),
   ),
 }
+
+export const edited = (input: { file: string | string[]; sessionID: SessionID }) =>
+  Effect.gen(function* () {
+    const bus = yield* Bus.Service
+    const files = Array.isArray(input.file) ? input.file : [input.file]
+    for (const file of files) {
+      yield* bus.publish(Event.Edited, {
+        file,
+        sessionID: input.sessionID,
+      })
+    }
+  })
 
 const log = Log.create({ service: "file" })
 
