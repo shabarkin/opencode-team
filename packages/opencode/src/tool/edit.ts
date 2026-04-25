@@ -16,6 +16,7 @@ import { Format } from "../format"
 import { Instance } from "../project/instance"
 import { Snapshot } from "@/snapshot"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { permPath } from "./perm"
 import { AppFileSystem } from "@opencode-ai/shared/filesystem"
 import * as Bom from "@/util/bom"
 
@@ -96,7 +97,7 @@ export const EditTool = Tool.define(
                 diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
                 yield* ctx.ask({
                   permission: "edit",
-                  patterns: [path.relative(Instance.worktree, filePath)],
+                  patterns: [permPath(filePath)],
                   always: ["*"],
                   metadata: {
                     filepath: filePath,
@@ -139,7 +140,7 @@ export const EditTool = Tool.define(
               )
               yield* ctx.ask({
                 permission: "edit",
-                patterns: [path.relative(Instance.worktree, filePath)],
+                patterns: [permPath(filePath)],
                 always: ["*"],
                 metadata: {
                   filepath: filePath,
@@ -201,7 +202,7 @@ export const EditTool = Tool.define(
               diff,
               filediff,
             },
-            title: `${path.relative(Instance.worktree, filePath)}`,
+            title: permPath(filePath),
             output,
           }
         }),

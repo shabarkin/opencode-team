@@ -13,6 +13,7 @@ import { AppFileSystem } from "@opencode-ai/shared/filesystem"
 import { Instance } from "../project/instance"
 import { trimDiff } from "./edit"
 import { assertExternalDirectoryEffect } from "./external-directory"
+import { permPath } from "./perm"
 import * as Bom from "@/util/bom"
 
 const MAX_PROJECT_DIAGNOSTICS_FILES = 5
@@ -52,7 +53,7 @@ export const WriteTool = Tool.define(
           const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
           yield* ctx.ask({
             permission: "edit",
-            patterns: [path.relative(Instance.worktree, filepath)],
+            patterns: [permPath(filepath)],
             always: ["*"],
             metadata: {
               filepath,
@@ -89,7 +90,7 @@ export const WriteTool = Tool.define(
           }
 
           return {
-            title: path.relative(Instance.worktree, filepath),
+            title: permPath(filepath),
             metadata: {
               diagnostics,
               filepath,
