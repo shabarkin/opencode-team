@@ -1,13 +1,12 @@
 import { describe, expect, spyOn, test } from "bun:test"
-import { Env } from "../../src/env"
 import { Instance } from "../../src/project/instance"
 import { Log } from "../../src/util"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
-import { Session } from "../../src/session"
-import { SessionPrompt } from "../../src/session/prompt"
+import { Session, SessionPrompt } from "../../src/team/runtime"
 import { Permission } from "../../src/permission"
 import { Team } from "../../src/team"
+import { callTeamTool } from "../team/_tool-runtime"
 import { TEAM_TOOL_IDS } from "../../src/tool/team"
 import { TeamCollectTool } from "../../src/tool/team-collect"
 import {
@@ -130,7 +129,9 @@ describe("task subagent team tool isolation", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const parent = await Session.create({})
         const parentSeed = await seed(parent.id)
@@ -142,14 +143,14 @@ describe("task subagent team tool isolation", () => {
           return { parts: [{ type: "text", text: "done" }] } as any
         }) as any)
 
-        const tool = await TaskTool.init()
-        const result = await tool.execute(
+        const result = await callTeamTool(
+          TaskTool,
           { description: "plain task", prompt: "Inspect the repo", subagent_type: "explore" },
           ctx(parent.id, parentMsg, await Session.messages({ sessionID: parent.id })),
         )
 
         const child = await Session.get(result.metadata.sessionId)
-        expect(child.permission?.filter((rule) => TEAM_TOOL_IDS.includes(rule.permission as any))).toHaveLength(
+        expect(child.permission?.filter((rule: any) => TEAM_TOOL_IDS.includes(rule.permission as any))).toHaveLength(
           TEAM_TOOL_IDS.length,
         )
         expect(await Team.trace(child.id)).toBeUndefined()
@@ -165,7 +166,9 @@ describe("task subagent team tool isolation", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const first = await Session.create({})
         const second = await Session.create({})
@@ -178,13 +181,14 @@ describe("task subagent team tool isolation", () => {
           return { parts: [{ type: "text", text: "done" }] } as any
         }) as any)
 
-        const tool = await TaskTool.init()
-        const task = await tool.execute(
+        const task = await callTeamTool(
+          TaskTool,
           { description: "plain task", prompt: "Inspect the repo", subagent_type: "explore" },
           ctx(first.id, firstMsg, await Session.messages({ sessionID: first.id })),
         )
 
-        const reused = await tool.execute(
+        const reused = await callTeamTool(
+          TaskTool,
           {
             description: "plain task",
             prompt: "Inspect the repo",
@@ -207,7 +211,9 @@ describe("task subagent team tool isolation", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
@@ -231,8 +237,8 @@ describe("task subagent team tool isolation", () => {
           return { parts: [{ type: "text", text: "done" }] } as any
         }) as any)
 
-        const tool = await TaskTool.init()
-        const result = await tool.execute(
+        const result = await callTeamTool(
+          TaskTool,
           { description: "team task", prompt: "Check the shared plan", subagent_type: "explore" },
           ctx(member.id, memberMsg, await Session.messages({ sessionID: member.id })),
         )
@@ -262,7 +268,9 @@ describe("task subagent team tool isolation", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
@@ -292,8 +300,8 @@ describe("task subagent team tool isolation", () => {
           return { parts: [{ type: "text", text: "done" }] } as any
         }) as any)
 
-        const tool = await TaskTool.init()
-        const result = await tool.execute(
+        const result = await callTeamTool(
+          TaskTool,
           { description: "locked task", prompt: "Inspect only", subagent_type: "explore" },
           ctx(member.id, memberMsg, await Session.messages({ sessionID: member.id })),
         )
@@ -313,7 +321,9 @@ describe("task subagent team tool isolation", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
@@ -343,8 +353,8 @@ describe("task subagent team tool isolation", () => {
           return { parts: [{ type: "text", text: "done" }] } as any
         }) as any)
 
-        const tool = await TeamDelegateTool.init()
-        const result = await tool.execute(
+        const result = await callTeamTool(
+          TeamDelegateTool,
           { description: "locked delegate", prompt: "Inspect only", agent: "explore" },
           ctx(member.id, memberMsg, await Session.messages({ sessionID: member.id })),
         )
@@ -364,7 +374,9 @@ describe("task subagent team tool isolation", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const parent = await Session.create({})
         const parentSeed = await seed(parent.id)
@@ -385,8 +397,8 @@ describe("task subagent team tool isolation", () => {
         process.on("unhandledRejection", fn)
 
         try {
-          const tool = await TaskTool.init()
-          const run = tool.execute(
+          const run = callTeamTool(
+            TaskTool,
             { description: "plain task", prompt: "Inspect the repo", subagent_type: "explore" },
             {
               ...ctx(parent.id, parentMsg, await Session.messages({ sessionID: parent.id })),
@@ -418,7 +430,9 @@ describe("task subagent team tool isolation", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
@@ -452,8 +466,8 @@ describe("task subagent team tool isolation", () => {
         process.on("unhandledRejection", fn)
 
         try {
-          const tool = await TeamDelegateTool.init()
-          const run = tool.execute(
+          const run = callTeamTool(
+            TeamDelegateTool,
             { description: "delegate task", prompt: "Inspect the plan", agent: "explore" },
             {
               ...ctx(member.id, memberMsg, await Session.messages({ sessionID: member.id })),
