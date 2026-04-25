@@ -1,18 +1,16 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Env } from "../../src/env"
 import { Global } from "../../src/global"
 import { Permission } from "../../src/permission"
 import { Instance } from "../../src/project/instance"
 import { ModelID, ProviderID } from "../../src/provider/schema"
-import { Session } from "../../src/session"
-import { SessionPrompt } from "../../src/session/prompt"
+import { Session, SessionPrompt } from "../../src/team/runtime"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Team } from "../../src/team"
 import { TeamWorktree } from "../../src/team/worktree"
 import { permPath } from "../../src/tool/perm"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
@@ -64,7 +62,9 @@ describe("team worktree", () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         expect(await TeamWorktree.isGitRepo(tmp.path)).toBe(true)
       },
@@ -75,7 +75,9 @@ describe("team worktree", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         expect(await TeamWorktree.isGitRepo(tmp.path)).toBe(false)
       },
@@ -86,7 +88,9 @@ describe("team worktree", () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const tree = await TeamWorktree.create({
           repoDir: tmp.path,
@@ -115,7 +119,9 @@ describe("team worktree", () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const tree = await TeamWorktree.create({
           repoDir: tmp.path,
@@ -143,7 +149,9 @@ describe("team worktree", () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const tree = await TeamWorktree.create({
           repoDir: tmp.path,
@@ -173,7 +181,9 @@ describe("team worktree", () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
@@ -216,7 +226,9 @@ describe("team worktree", () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
@@ -266,7 +278,9 @@ describe("team worktree", () => {
     })
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
@@ -319,7 +333,9 @@ describe("team worktree", () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
@@ -358,7 +374,9 @@ describe("team worktree", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
@@ -396,7 +414,9 @@ describe("team worktree", () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
