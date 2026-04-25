@@ -3,10 +3,9 @@ import path from "path"
 import fs from "fs/promises"
 import { Instance } from "../../src/project/instance"
 import { Team } from "../../src/team"
-import { Session } from "../../src/session"
+import { Session } from "../../src/team/runtime"
 import { Inbox } from "../../src/team/inbox"
-import { Env } from "../../src/env"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { ProviderID, ModelID } from "../../src/provider/schema"
 
@@ -50,7 +49,9 @@ describe("Team recovery after restart", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           await Team.create({
             name: "recover-test",
@@ -98,7 +99,9 @@ describe("Team recovery after restart", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           await Team.create({
             name: "recover-skip",
@@ -144,7 +147,9 @@ describe("Team recovery after restart", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           const lead = await Session.create({})
           const member = await Session.create({ parentID: lead.id })
@@ -206,7 +211,9 @@ describe("Team recovery after restart", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           const leadSession = await Session.create({})
           const memberSession = await Session.create({ parentID: leadSession.id })
@@ -247,7 +254,9 @@ describe("Team recovery after restart", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           await Team.create({
             name: "recover-mix",
@@ -304,7 +313,9 @@ describe("Team recovery after restart", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           const result = await Team.recover()
           expect(result.interrupted).toBe(0)
@@ -321,7 +332,9 @@ describe("Team recovery after restart", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           await Team.create({ name: "team-alpha", leadSessionID: "ses_alpha" })
           await Team.addMember("team-alpha", {
@@ -380,7 +393,9 @@ describe("Team recovery after restart", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           await Team.create({ name: "idem-test", leadSessionID: "ses_idem" })
           await Team.addMember("idem-test", {
