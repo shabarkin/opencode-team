@@ -30,6 +30,8 @@ import { useArgs } from "./args"
 import { batch, onMount } from "solid-js"
 import { Log } from "@/util"
 import { emptyConsoleState, type ConsoleState } from "@/config/console-state"
+import { loadTeamSession, type TeamSessionState } from "@/team/session-payload"
+import { targets } from "./team-sync"
 
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
@@ -75,6 +77,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       }
       formatter: FormatterStatus[]
       vcs: VcsInfo | undefined
+      team: Record<string, TeamSessionState>
     }>({
       provider_next: {
         all: [],
@@ -102,14 +105,40 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       mcp_resource: {},
       formatter: [],
       vcs: undefined,
+      team: {},
     })
 
     const event = useEvent()
     const project = useProject()
     const sdk = useSDK()
 
-    const fullSyncedSessions = new Set<string>()
+    const TEAM_SYNC_LIMIT = 8
+    const fullSyncedSessions = new Map<string, number>()
     let syncedWorkspace = project.workspace.current()
+
+    function watch(sessionID: string) {
+      fullSyncedSessions.delete(sessionID)
+      fullSyncedSessions.set(sessionID, Date.now())
+      if (fullSyncedSessions.size <= TEAM_SYNC_LIMIT) return
+      const oldest = fullSyncedSessions.keys().next().value
+      if (oldest) fullSyncedSessions.delete(oldest)
+    }
+
+    async function syncTeam(sessionID: string) {
+      watch(sessionID)
+      const data = await loadTeamSession({ url: sdk.url, fetch: sdk.fetch, sessionID })
+      if (data === undefined) return
+      if (data === null) {
+        setStore(
+          "team",
+          produce((draft) => {
+            delete draft[sessionID]
+          }),
+        )
+        return
+      }
+      setStore("team", sessionID, reconcile(data))
+    }
 
     event.subscribe((event) => {
       switch (event.type) {
@@ -200,12 +229,19 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           break
 
         case "session.deleted": {
-          const result = Binary.search(store.session, event.properties.info.id, (s) => s.id)
+          const id = event.properties.info.id
+          const result = Binary.search(store.session, id, (s) => s.id)
           if (result.found) {
             setStore(
-              "session",
               produce((draft) => {
-                draft.splice(result.index, 1)
+                draft.session.splice(result.index, 1)
+                delete draft.permission[id]
+                delete draft.question[id]
+                delete draft.todo[id]
+                delete draft.message[id]
+                delete draft.session_status[id]
+                delete draft.session_diff[id]
+                delete draft.team[id]
               }),
             )
           }
@@ -347,6 +383,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           setStore("vcs", { branch: event.properties.branch })
           break
         }
+      }
+
+      // Team events — payloads are SSE-redacted, so refetch open session team state.
+      const raw = event as { type?: string; properties?: { teamName?: string } }
+      if (typeof raw.type === "string" && raw.type.startsWith("team.")) {
+        const teamName = typeof raw.properties?.teamName === "string" ? raw.properties.teamName : undefined
+        for (const sessionID of targets(fullSyncedSessions.keys(), store.team, teamName)) void syncTeam(sessionID)
       }
     })
 
@@ -517,7 +560,16 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               draft.session_diff[sessionID] = diff.data ?? []
             }),
           )
-          fullSyncedSessions.add(sessionID)
+          watch(sessionID)
+          void syncTeam(sessionID)
+        },
+      },
+      team: {
+        get(sessionID: string) {
+          return store.team[sessionID]
+        },
+        async sync(sessionID: string) {
+          await syncTeam(sessionID)
         },
       },
       bootstrap,
