@@ -1,4 +1,4 @@
-import { defaultTeamSession, teamToolMeta } from "@opencode-ai/util/team-tool-meta"
+import { defaultTeamSession, teamToolMeta } from "@opencode-ai/shared/util/team-tool-meta"
 
 type Vars = Record<string, string | number | boolean>
 

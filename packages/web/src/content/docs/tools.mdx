@@ -43,10 +43,6 @@ You can also use wildcards to control multiple tools at once. For example, to re
 
 Here are all the built-in tools available in OpenCode.
 
-:::note
-OpenCode does not always expose the same file-editing surface to every model. Most models get `edit` and `write`, while supported OpenAI GPT models receive `apply_patch` instead.
-:::
-
 ---
 
 ### bash
@@ -99,7 +95,7 @@ Create new files or overwrite existing ones.
 Use this to allow the LLM to create new files. It will overwrite existing files if they already exist.
 
 :::note
-The `write` tool is controlled by the `edit` permission, which covers all file modifications (`edit`, `write`, `apply_patch`, `multiedit`).
+The `write` tool is controlled by the `edit` permission, which covers all file modifications (`edit`, `write`, `apply_patch`).
 :::
 
 ---
@@ -155,23 +151,6 @@ Search for files using glob patterns like `**/*.js` or `src/**/*.ts`. Returns ma
 
 ---
 
-### list
-
-List files and directories in a given path.
-
-```json title="opencode.json" {4}
-{
-  "$schema": "https://opencode.ai/config.json",
-  "permission": {
-    "list": "allow"
-  }
-}
-```
-
-This tool lists directory contents. It accepts glob patterns to filter results.
-
----
-
 ### lsp (experimental)
 
 Interact with your configured LSP servers to get code intelligence features like definitions, references, hover info, and call hierarchy.
@@ -208,12 +187,14 @@ Apply patches to files.
 }
 ```
 
-This tool applies a structured patch envelope to your codebase. Supported OpenAI GPT models receive this tool instead of `edit` and `write`.
+This tool applies patch files to your codebase. Useful for applying diffs and patches from various sources.
 
-Use it when the model needs to create, update, move, or delete files in one patch.
+When handling `tool.execute.before` or `tool.execute.after` hooks, check `input.tool === "apply_patch"` (not `"patch"`).
+
+`apply_patch` uses `output.args.patchText` instead of `output.args.filePath`. Paths are embedded in marker lines within `patchText` and are relative to the project root (for example: `*** Add File: src/new-file.ts`, `*** Update File: src/existing.ts`, `*** Move to: src/renamed.ts`, `*** Delete File: src/obsolete.ts`).
 
 :::note
-The `apply_patch` tool is controlled by the `edit` permission, which covers all file modifications (`edit`, `write`, `apply_patch`, `multiedit`).
+The `apply_patch` tool is controlled by the `edit` permission, which covers all file modifications (`edit`, `write`, `apply_patch`).
 :::
 
 ---
@@ -251,43 +232,6 @@ Creates and updates task lists to track progress during complex operations. The 
 :::note
 This tool is disabled for subagents by default, but you can enable it manually. [Learn more](/docs/agents/#permissions)
 :::
-
----
-
-### todoread
-
-Read existing todo lists.
-
-```json title="opencode.json" {4}
-{
-  "$schema": "https://opencode.ai/config.json",
-  "permission": {
-    "todoread": "allow"
-  }
-}
-```
-
-Reads the current todo list state. Used by the LLM to track what tasks are pending or completed.
-
-:::note
-This tool is disabled for subagents by default, but you can enable it manually. [Learn more](/docs/agents/#permissions)
-:::
-
----
-
-### Coordinate work
-
-This fork adds experimental `team_*` tools for coordinated multi-agent work.
-They are available only when `OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1` is set.
-
-- `team_create`, `team_spawn`, `team_shutdown_all`, `team_shutdown`, `team_merge`, and `team_cleanup` manage the team lifecycle.
-- `team_message`, `team_reply`, `team_broadcast`, `team_inbox`, and `team_submit_result` handle coordination and reporting.
-- `team_tasks`, `team_claim`, `team_collect`, `team_wait`, `team_notepad`, `team_phase`, and `team_status` track shared work and progress.
-- `team_approve_plan`, `team_health`, `team_restart`, `team_delegate`, and `team_request_spawn` help with review, recovery, and extra delegation.
-
-These tool IDs are still experimental and may change.
-
-See [Agent Teams](/docs/agent-teams) for the full lifecycle and [Steering](/docs/steering) for review and redirect flows.
 
 ---
 
@@ -384,7 +328,7 @@ MCP (Model Context Protocol) servers allow you to integrate external tools and s
 
 ## Internals
 
-Internally, tools like `grep`, `glob`, and `list` use [ripgrep](https://github.com/BurntSushi/ripgrep) under the hood. By default, ripgrep respects `.gitignore` patterns, which means files and directories listed in your `.gitignore` will be excluded from searches and listings.
+Internally, tools like `grep` and `glob` use [ripgrep](https://github.com/BurntSushi/ripgrep) under the hood. By default, ripgrep respects `.gitignore` patterns, which means files and directories listed in your `.gitignore` will be excluded from searches and listings.
 
 ---
 
