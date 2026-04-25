@@ -1,4 +1,4 @@
-import { Log } from "../util/log"
+import { Log } from "../util"
 import { Storage } from "../storage/storage"
 import { Instance } from "../project/instance"
 

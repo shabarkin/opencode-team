@@ -1,4 +1,4 @@
-import { Log } from "../util/log"
+import { Log } from "../util"
 import { Bus } from "../bus"
 import { MessageV2 } from "../session/message-v2"
 import { SessionPrompt } from "../session/prompt"

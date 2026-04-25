@@ -1,5 +1,5 @@
-import { Log } from "../util/log"
-import { Lock } from "../util/lock"
+import { Log } from "../util"
+import { Lock } from "../util"
 import { Global } from "../global"
 import { Instance } from "../project/instance"
 import { Bus } from "../bus"

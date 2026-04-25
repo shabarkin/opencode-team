@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { Global } from "../global"
-import { Log } from "../util/log"
+import { Log } from "../util"
 import { git as runGit } from "../util/git"
 
 const log = Log.create({ service: "team.worktree" })

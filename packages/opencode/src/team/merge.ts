@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import { Instance } from "@/project/instance"
 import { Storage } from "@/storage/storage"
-import { Log } from "@/util/log"
+import { Log } from "@/util"
 import type { TeamInfo, TeamMember } from "./events"
 
 const log = Log.create({ service: "team.merge" })

@@ -1,10 +1,10 @@
 import z from "zod"
 import path from "path"
-import { Log } from "../util/log"
+import { Log } from "../util"
 import { Bus } from "../bus"
 import { Instance } from "../project/instance"
 import { Storage } from "../storage/storage"
-import { Lock } from "../util/lock"
+import { Lock } from "../util"
 import { fn } from "../util/fn"
 import {
   TeamEvent,

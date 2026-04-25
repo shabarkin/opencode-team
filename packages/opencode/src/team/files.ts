@@ -1,4 +1,4 @@
-import { Log } from "../util/log"
+import { Log } from "../util"
 import { Bus } from "../bus"
 import { File } from "../file"
 import { Team, TeamEvent } from "./index"
