@@ -3,7 +3,7 @@ import path from "path"
 import { Log } from "../util"
 import { Bus } from "../bus"
 import { Instance } from "../project/instance"
-import { Storage } from "../storage/storage"
+import { Storage } from "./runtime"
 import { Lock } from "../util"
 import { fn } from "../util/fn"
 import {
@@ -169,11 +169,32 @@ type Link = {
   memberName?: string
 }
 
-const cache = Instance.state(() => ({
-  links: new Map<string, Link>(),
-  traces: new Map<string, Trace>(),
-  hydrated: false,
-}))
+// TODO(team): Upstream removed `Instance.state(...)`. The new equivalent is
+// `InstanceState.make<T>(Effect.fn(...))` from inside Effect.gen, which is
+// scoped to the instance lifecycle and disposed when the instance is torn
+// down. Until the team module is ported to Effect, we use a plain
+// per-directory map keyed by `Instance.directory`. This loses the
+// scope-tied cleanup (state outlives instance disposal until process exit)
+// but matches the previous read/write semantics.
+type TeamCache = {
+  links: Map<string, Link>
+  traces: Map<string, Trace>
+  hydrated: boolean
+}
+const cacheMap = new Map<string, TeamCache>()
+function cache(): TeamCache {
+  const key = Instance.directory
+  let entry = cacheMap.get(key)
+  if (!entry) {
+    entry = {
+      links: new Map<string, Link>(),
+      traces: new Map<string, Trace>(),
+      hydrated: false,
+    }
+    cacheMap.set(key, entry)
+  }
+  return entry
+}
 
 function memberKey(sessionID: string): string[] {
   return ["team_member", Instance.project.id, sessionID]
@@ -297,15 +318,15 @@ function scopeRules(scope: TeamScopeType | undefined, dir: string): Rule[] {
 }
 
 async function leadDir(leadSessionID: string) {
-  const { Session } = await import("../session")
+  const { Session } = await import("./runtime")
   const { SessionID } = await import("../session/schema")
   const session = await Session.get(SessionID.make(leadSessionID)).catch(() => undefined)
   return session?.directory ?? Instance.directory
 }
 
 async function wake(teamName: string, name: string, sessionID: string) {
-  const { SessionPrompt } = await import("../session/prompt")
-  const { SessionStatus } = await import("../session/status")
+  const { SessionPrompt } = await import("./runtime")
+  const { SessionStatus } = await import("./runtime")
   const { SessionID } = await import("../session/schema")
 
   const sid = SessionID.make(sessionID)
@@ -472,7 +493,7 @@ function lockRules(pattern: string) {
 }
 
 async function childPermission(sessionID: string, rules: Rule[]) {
-  const { Session } = await import("../session")
+  const { Session } = await import("./runtime")
   const { SessionID } = await import("../session/schema")
   const session = await Session.get(SessionID.make(sessionID)).catch(() => undefined)
   return [
@@ -484,7 +505,7 @@ async function childPermission(sessionID: string, rules: Rule[]) {
 }
 
 async function stopped(sessionID: string) {
-  const { SessionStatus } = await import("../session/status")
+  const { SessionStatus } = await import("./runtime")
   const { SessionID } = await import("../session/schema")
   const status = await SessionStatus.get(SessionID.make(sessionID))
   return status.type === "idle"
@@ -615,7 +636,7 @@ export namespace Team {
       if (!event.properties.delegate) return
 
       try {
-        const { Session } = await import("../session")
+        const { Session } = await import("./runtime")
         const { SessionID } = await import("../session/schema")
         const session = await Session.get(SessionID.make(event.properties.leadSessionID))
         await Session.setPermission({
@@ -1117,7 +1138,7 @@ export namespace Team {
     }
 
     if (decision.action === "approve") {
-      const { Agent } = await import("../agent/agent")
+      const { Agent } = await import("./runtime")
       const agent = await Agent.get(input.agent)
       if (!agent || agent.mode === "primary" || agent.hidden === true) {
         throw new Error(`Agent "${input.agent}" not found.`)
@@ -1201,7 +1222,7 @@ export namespace Team {
     agent: { model?: { providerID: string; modelID: string } }
     messages: Array<{ info: { role: string; model?: { providerID: string; modelID: string } } }>
   }): Promise<{ providerID: string; modelID: string } | { error: string }> {
-    const { Provider } = await import("../provider/provider")
+    const { Provider } = await import("./runtime")
     const { ProviderID, ModelID } = await import("../provider/schema")
 
     async function known(model: { providerID: string; modelID: string }) {
@@ -1240,7 +1261,7 @@ export namespace Team {
     total: { input: number; output: number; reasoning: number; cost: number }
     perMember: Record<string, { input: number; output: number; reasoning: number; cost: number }>
   }> {
-    const { Session } = await import("../session")
+    const { Session } = await import("./runtime")
     const { SessionID } = await import("../session/schema")
 
     const team = await get(teamName)
@@ -1315,8 +1336,8 @@ export namespace Team {
     mode?: TeamModeType
     resultDeadline?: number
   }): Promise<{ sessionID: string; label: string }> {
-    const { Session } = await import("../session")
-    const { SessionPrompt } = await import("../session/prompt")
+    const { Session } = await import("./runtime")
+    const { SessionPrompt } = await import("./runtime")
     const { Instance: Inst } = await import("../project/instance")
 
     const label = `${input.model.providerID}/${input.model.modelID}`
@@ -1337,7 +1358,7 @@ export namespace Team {
 
     const scope = TeamScope.withDefaults(TeamScope.merge(team.scope, input.scope))
     const { TeamWorktree } = await import("./worktree")
-    const { Project } = await import("../project/project")
+    const { Project } = await import("./runtime")
     const tree = team.worktrees
       ? await TeamWorktree.create({
           repoDir: Inst.directory,
@@ -1756,7 +1777,7 @@ export namespace Team {
     approved: boolean
     feedback?: string
   }): Promise<void> {
-    const { Session } = await import("../session")
+    const { Session } = await import("./runtime")
     const { TeamMessaging } = await import("./messaging")
 
     const team = await get(input.teamName)
@@ -1837,7 +1858,7 @@ export namespace Team {
   > {
     const { TeamMessaging } = await import("./messaging")
     const { Inbox } = await import("./inbox")
-    const { SessionPrompt } = await import("../session/prompt")
+    const { SessionPrompt } = await import("./runtime")
     const { SessionID } = await import("../session/schema")
 
     const team = await get(input.teamName)
@@ -2102,7 +2123,7 @@ export namespace Team {
       const { TeamNotepad } = await import("./notepad")
       const { removeEdits } = await import("./files")
       const { TeamWorktree } = await import("./worktree")
-      const { Project } = await import("../project/project")
+      const { Project } = await import("./runtime")
       const repoDir = await leadDir(team.leadSessionID)
       await Inbox.removeAll(
         teamName,
@@ -2136,8 +2157,8 @@ export namespace Team {
   }
 
   async function interrupt(teamName: string, memberName: string, keep: boolean): Promise<boolean> {
-    const { SessionPrompt } = await import("../session/prompt")
-    const { SessionStatus } = await import("../session/status")
+    const { SessionPrompt } = await import("./runtime")
+    const { SessionStatus } = await import("./runtime")
     const { SessionID } = await import("../session/schema")
 
     const team = await get(teamName)
@@ -2329,7 +2350,7 @@ export namespace Team {
    * Returns the count of members that were cancelled.
    */
   export async function cancelAllMembers(teamName: string): Promise<number> {
-    const { SessionPrompt } = await import("../session/prompt")
+    const { SessionPrompt } = await import("./runtime")
     const { SessionID } = await import("../session/schema")
 
     const team = await get(teamName)
@@ -2354,7 +2375,7 @@ export namespace Team {
    * Called once during InstanceBootstrap.
    */
   export async function recover(): Promise<{ interrupted: number }> {
-    const { Session } = await import("../session")
+    const { Session } = await import("./runtime")
     const { SessionID } = await import("../session/schema")
     const { Inbox } = await import("./inbox")
 
@@ -2472,7 +2493,7 @@ export namespace Team {
         count++
       }
       try {
-        const { Session } = await import("../session")
+        const { Session } = await import("./runtime")
         const { SessionID, MessageID, PartID } = await import("../session/schema")
         const { ProviderID, ModelID } = await import("../provider/schema")
         const leadSessionID = SessionID.make(team.leadSessionID)
