@@ -72,6 +72,7 @@ import { errorMessage } from "@/util/error"
 import { Toast, useToast } from "../../ui/toast"
 import { useKV } from "../../context/kv.tsx"
 import * as Editor from "../../util/editor"
+import { timeline } from "./timeline"
 import stripAnsi from "strip-ansi"
 import { usePromptRef } from "../../context/prompt"
 import { useExit } from "../../context/exit"
@@ -79,6 +80,7 @@ import { Filesystem } from "@/util"
 import { Global } from "@/global"
 import { PermissionPrompt } from "./permission"
 import { QuestionPrompt } from "./question"
+import { childSession, teamTool } from "@/cli/cmd/tool-link"
 import { DialogExportOptions } from "../../ui/dialog-export-options"
 import * as Model from "../../util/model"
 import { formatTranscript } from "../../util/transcript"
@@ -134,6 +136,7 @@ export function Session() {
       .toSorted((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
   })
   const messages = createMemo(() => sync.data.message[route.sessionID] ?? [])
+  const items = createMemo(() => timeline(messages()))
   const permissions = createMemo(() => {
     if (session()?.parentID) return []
     return children().flatMap((x) => sync.data.permission[x.id] ?? [])
@@ -165,10 +168,21 @@ export function Session() {
   const [diffWrapMode] = kv.signal<"word" | "none">("diff_wrap_mode", "word")
   const [_animationsEnabled, _setAnimationsEnabled] = kv.signal("animations_enabled", true)
   const [showGenericToolOutput, setShowGenericToolOutput] = kv.signal("generic_tool_output_visibility", false)
+  const [selectedTeammate, setSelectedTeammate] = createSignal<string | null>(null)
+  const teamInfo = createMemo(() => sync.data.team[route.sessionID])
+  const teamMembers = createMemo(() => {
+    const info = teamInfo()
+    if (!info?.members?.length) return []
+    return info.members.reduce<Array<(typeof info.members)[number] & { sessionID: string }>>((acc, m) => {
+      if (!m.sessionID || m.status === "shutdown") return acc
+      acc.push(m as (typeof info.members)[number] & { sessionID: string })
+      return acc
+    }, [])
+  })
 
   const wide = createMemo(() => dimensions().width > 120)
   const sidebarVisible = createMemo(() => {
-    if (session()?.parentID) return false
+    if (session()?.parentID && !teamInfo()) return false
     if (sidebarOpen()) return true
     if (sidebar() === "auto" && wide()) return true
     return false
@@ -176,6 +190,16 @@ export function Session() {
   const showTimestamps = createMemo(() => timestamps() === "show")
   const contentWidth = createMemo(() => dimensions().width - (sidebarVisible() ? 42 : 0) - 4)
   const providers = createMemo(() => Model.index(sync.data.provider))
+
+  createEffect(
+    on(
+      () => route.sessionID,
+      () => {
+        setSelectedTeammate(null)
+      },
+      { defer: true },
+    ),
+  )
 
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
@@ -297,6 +321,57 @@ export function Session() {
     }
   })
 
+  useKeyboard((evt) => {
+    if (evt.name !== "escape") return
+    const s = session()
+    if (!s?.parentID) return
+    if (!teamInfo()) return
+    const state = sync.data.session_status?.[route.sessionID]
+    if (state?.type !== "busy") return
+    evt.preventDefault()
+    sdk
+      .fetch(`${sdk.url}/session/${route.sessionID}/abort`, {
+        method: "POST",
+        headers: { "x-opencode-session": route.sessionID },
+      })
+      .catch(() => {})
+  })
+
+  useKeyboard((evt) => {
+    if (evt.name === "escape" && selectedTeammate()) {
+      evt.preventDefault()
+      setSelectedTeammate(null)
+      return
+    }
+
+    if (evt.shift !== true) return
+    if (evt.name !== "up" && evt.name !== "down") return
+    if (session()?.parentID) return
+
+    const members = teamMembers()
+    if (members.length === 0) return
+
+    evt.preventDefault()
+    const cur = selectedTeammate()
+    if (cur === null) {
+      setSelectedTeammate(evt.name === "down" ? members[0].name : members[members.length - 1].name)
+      return
+    }
+
+    const idx = members.findIndex((m) => m.name === cur)
+    if (idx < 0) {
+      setSelectedTeammate(null)
+      return
+    }
+
+    if (evt.name === "down") {
+      setSelectedTeammate(idx >= members.length - 1 ? null : members[idx + 1].name)
+      return
+    }
+
+    setSelectedTeammate(idx <= 0 ? null : members[idx - 1].name)
+  })
+
   // Helper: Find next visible message boundary in direction
   const findNextVisibleMessage = (direction: "next" | "prev"): string | null => {
     const children = scroll.getChildren()
@@ -384,6 +459,14 @@ export function Session() {
       if (!session()?.parentID || dialog.stack.length > 0) return
       func(dialog)
     }
+  }
+
+  function leadID() {
+    return teamInfo()?.leadSessionID
+  }
+
+  function teamSessions() {
+    return teamMembers()
   }
 
   const command = useCommandDialog()
@@ -547,7 +630,14 @@ export function Session() {
       },
       onSelect: async (dialog) => {
         const status = sync.data.session_status?.[route.sessionID]
-        if (status?.type !== "idle") await sdk.client.session.abort({ sessionID: route.sessionID }).catch(() => {})
+        if (status?.type !== "idle") {
+          await sdk
+            .fetch(`${sdk.url}/session/${route.sessionID}/abort`, {
+              method: "POST",
+              headers: { "x-opencode-session": route.sessionID },
+            })
+            .catch(() => {})
+        }
         const revert = session()?.revert?.messageID
         const message = messages().findLast((x) => (!revert || x.id < revert) && x.role === "user")
         if (!message) return
@@ -1006,6 +1096,99 @@ export function Session() {
         dialog.clear()
       }),
     },
+    {
+      title: "Next teammate",
+      value: "team.next",
+      category: "Team",
+      hidden: true,
+      enabled: !!teamInfo(),
+      onSelect: (dialog) => {
+        const members = teamSessions()
+        if (members.length === 0) {
+          dialog.clear()
+          return
+        }
+        const idx = members.findIndex((m) => m.sessionID === route.sessionID)
+        if (idx >= 0) {
+          navigate({ type: "session", sessionID: members[(idx + 1) % members.length].sessionID })
+          dialog.clear()
+          return
+        }
+        navigate({ type: "session", sessionID: members[0].sessionID })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Previous teammate",
+      value: "team.previous",
+      category: "Team",
+      hidden: true,
+      enabled: !!teamInfo(),
+      onSelect: (dialog) => {
+        const members = teamSessions()
+        if (members.length === 0) {
+          dialog.clear()
+          return
+        }
+        const idx = members.findIndex((m) => m.sessionID === route.sessionID)
+        if (idx >= 0) {
+          navigate({ type: "session", sessionID: members[(idx - 1 + members.length) % members.length].sessionID })
+          dialog.clear()
+          return
+        }
+        navigate({ type: "session", sessionID: members[members.length - 1].sessionID })
+        dialog.clear()
+      },
+    },
+    {
+      title: "Go to team lead",
+      value: "team.lead",
+      category: "Team",
+      hidden: true,
+      enabled: !!teamInfo(),
+      onSelect: (dialog) => {
+        const sid = leadID()
+        if (sid) {
+          navigate({ type: "session", sessionID: sid })
+        }
+        dialog.clear()
+      },
+    },
+    {
+      title: "Toggle delegate mode",
+      value: "team.delegate.toggle",
+      category: "Team",
+      hidden: true,
+      enabled: teamInfo()?.role === "lead",
+      slash: {
+        name: "delegate",
+      },
+      onSelect: async (dialog) => {
+        const info = teamInfo()
+        if (!info || info.role !== "lead") {
+          dialog.clear()
+          return
+        }
+        try {
+          const res = await sdk.fetch(`${sdk.url}/team/${info.teamName}/delegate`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-opencode-session": route.sessionID,
+            },
+            body: JSON.stringify({ enabled: !info.delegate }),
+          })
+          if (!res.ok) throw new Error("bad response")
+          toast.show({
+            message: info.delegate ? "Delegate mode disabled" : "Delegate mode enabled — coordination only",
+            variant: "info",
+          })
+        } catch {
+          toast.show({ message: "Failed to toggle delegate mode", variant: "error" })
+        }
+        dialog.clear()
+      },
+    },
   ])
 
   const revertInfo = createMemo(() => session()?.revert)
@@ -1074,7 +1257,7 @@ export function Session() {
               scrollAcceleration={scrollAcceleration()}
             >
               <box height={1} />
-              <For each={messages()}>
+              <For each={items()}>
                 {(message, index) => (
                   <Switch>
                     <Match when={message.id === revert()?.messageID}>
@@ -1180,6 +1363,14 @@ export function Session() {
               <Show when={session()?.parentID}>
                 <SubagentFooter />
               </Show>
+              <Show when={selectedTeammate()}>
+                <box paddingLeft={3} flexShrink={0}>
+                  <text fg={theme.primary}>
+                    Messaging: <span style={{ bold: true }}>@{selectedTeammate()}</span>
+                    <span style={{ fg: theme.textMuted }}> (Shift+Up/Down to change, Esc to deselect)</span>
+                  </text>
+                </box>
+              </Show>
               <Show when={visible()}>
                 <TuiPluginRuntime.Slot
                   name="session_prompt"
@@ -1194,6 +1385,8 @@ export function Session() {
                     visible={visible()}
                     ref={bind}
                     disabled={disabled()}
+                    selectedTeammate={selectedTeammate()}
+                    onTeammateMessageSent={() => setSelectedTeammate(null)}
                     onSubmit={() => {
                       toBottom()
                     }}
@@ -1229,6 +1422,33 @@ export function Session() {
       </box>
     </context.Provider>
   )
+}
+
+function teamPart(part: Part): part is TextPart {
+  if (part.type !== "text") return false
+  if (!part.synthetic || part.ignored) return false
+  const meta = part.metadata as Record<string, unknown> | undefined
+  return meta?.teamMessage === true || typeof meta?.inboxMessageId === "string"
+}
+
+function teamText(part: TextPart) {
+  const meta = part.metadata as Record<string, unknown> | undefined
+  const from = typeof meta?.teamFrom === "string" ? meta.teamFrom : undefined
+  if (from) {
+    const prefix = `[Team message from ${from}]: `
+    return {
+      from,
+      text: part.text.startsWith(prefix) ? part.text.slice(prefix.length) : part.text,
+      title: from === "lead" ? "Team instruction" : "Team message",
+    }
+  }
+
+  const match = part.text.match(/^\[Team message from ([^\]]+)\]:\s*/)
+  return {
+    from: match?.[1],
+    text: match ? part.text.slice(match[0].length) : part.text,
+    title: match?.[1] === "lead" ? "Team instruction" : "Team message",
+  }
 }
 
 const MIME_BADGE: Record<string, string> = {
@@ -1270,9 +1490,37 @@ function UserMessage(props: {
   const metadataVisible = createMemo(() => queued() || ctx.showTimestamps())
 
   const compaction = createMemo(() => props.parts.find((x) => x.type === "compaction"))
+  const team = createMemo(() => props.parts.find(teamPart))
+  const instruction = createMemo(() => {
+    const part = team()
+    if (!part) return
+    return teamText(part)
+  })
 
   return (
     <>
+      <Show when={!text() && instruction()}>
+        <box
+          id={props.message.id}
+          border={["left"]}
+          borderColor={instruction()?.from === "lead" ? theme.primary : theme.secondary}
+          customBorderChars={SplitBorder.customBorderChars}
+          marginTop={props.index === 0 ? 0 : 1}
+        >
+          <box paddingTop={1} paddingBottom={1} paddingLeft={2} backgroundColor={theme.backgroundPanel} flexShrink={0}>
+            <text fg={instruction()?.from === "lead" ? theme.primary : theme.secondary}>
+              <b>{instruction()?.title}</b>
+              <Show when={instruction()?.from}>
+                <span style={{ fg: theme.textMuted }}> · from {instruction()?.from}</span>
+              </Show>
+            </text>
+            <text fg={theme.text}>{instruction()?.text}</text>
+            <Show when={ctx.showTimestamps()}>
+              <text fg={theme.textMuted}>{Locale.todayTimeOrDateTime(props.message.time.created)}</text>
+            </Show>
+          </box>
+        </box>
+      </Show>
       <Show when={text()}>
         <box
           id={props.message.id}
@@ -1386,7 +1634,7 @@ function AssistantMessage(props: { message: AssistantMessage; parts: Part[]; las
           )
         }}
       </For>
-      <Show when={props.parts.some((x) => x.type === "tool" && x.tool === "task")}>
+      <Show when={props.parts.some((x) => x.type === "tool" && !!childSession(x))}>
         <box paddingTop={1} paddingLeft={3}>
           <text fg={theme.text}>
             {keybind.print("session_child_first")}
@@ -1579,6 +1827,16 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         </Match>
         <Match when={props.part.tool === "task"}>
           <Task {...toolprops} />
+        </Match>
+        <Match
+          when={
+            props.part.tool === "team_spawn" ||
+            props.part.tool === "team_request_spawn" ||
+            props.part.tool === "team_delegate" ||
+            props.part.tool === "team_create"
+          }
+        >
+          <TeamTool {...toolprops} />
         </Match>
         <Match when={props.part.tool === "apply_patch"}>
           <ApplyPatch {...toolprops} />
@@ -2029,6 +2287,41 @@ function Task(props: ToolProps<typeof TaskTool>) {
         if (props.metadata.sessionId) {
           navigate({ type: "session", sessionID: props.metadata.sessionId })
         }
+      }}
+    >
+      {content()}
+    </InlineTool>
+  )
+}
+
+function TeamTool(props: ToolProps<any>) {
+  const { navigate } = useRoute()
+  const sync = useSync()
+  const info = createMemo(() => teamTool(props.part))
+  const id = createMemo(() => childSession(props.part))
+  const done = createMemo(() => props.part.state.status === "completed")
+
+  onMount(() => {
+    const sid = id()
+    if (sid && !sync.data.message[sid]?.length) void sync.session.sync(sid)
+  })
+
+  const content = createMemo(() => {
+    const item = info()
+    if (!item) return props.part.tool
+    return [item.title, item.subtitle, done() && id() ? `└ session ${id()}` : ""].filter(Boolean).join("\n")
+  })
+
+  return (
+    <InlineTool
+      icon={info()?.icon ?? "⚙"}
+      spinner={props.part.state.status === "running"}
+      complete={info()?.title}
+      pending={info()?.pending ?? "Running tool..."}
+      part={props.part}
+      onClick={() => {
+        const sid = id()
+        if (sid) navigate({ type: "session", sessionID: sid })
       }}
     >
       {content()}
