@@ -1,16 +1,15 @@
 import { describe, expect, spyOn, test } from "bun:test"
-import { Env } from "../../src/env"
 import { Instance } from "../../src/project/instance"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
-import { Session } from "../../src/session"
-import { Storage } from "../../src/storage/storage"
+import { Session, Storage } from "../../src/team/runtime"
 import { Team, TeamTasks } from "../../src/team"
 import { TeamCollectTool } from "../../src/tool/team-collect"
 import { TeamSubmitResultTool } from "../../src/tool/team-inbox"
 import { TeamStatusTool } from "../../src/tool/team-status"
 import { tmpdir } from "../fixture/fixture"
+import { callTeamTool } from "./_tool-runtime"
 
 Log.init({ print: false })
 
@@ -84,19 +83,21 @@ describe("team collect", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
         const { lead, member } = await basic("collect-ready")
 
-        const wait = (await TeamCollectTool.init()).execute(
+        const wait = callTeamTool(
+          TeamCollectTool,
           { timeout_seconds: 10, poll_interval_seconds: 5 },
           ctx(lead.id),
         )
 
-        await (
-          await TeamSubmitResultTool.init()
-        ).execute(
+        await callTeamTool(
+          TeamSubmitResultTool,
           {
             title: "Audit complete",
             summary: "All requested checks are done.",
@@ -114,7 +115,7 @@ describe("team collect", () => {
         expect(team?.team_phase).toBe("synthesis")
         expect(team?.delivered).toBe(true)
 
-        const status = await (await TeamStatusTool.init()).execute({}, ctx(lead.id))
+        const status = await callTeamTool(TeamStatusTool, {}, ctx(lead.id))
         expect(status.output).toContain("team_phase=synthesis")
 
         sleep.mockRestore()
@@ -127,10 +128,12 @@ describe("team collect", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("collect-ready-no-result", "ready")
-        const out = await (await TeamCollectTool.init()).execute({ members: ["worker"] }, ctx(lead.id))
+        const out = await callTeamTool(TeamCollectTool, { members: ["worker"] }, ctx(lead.id))
 
         expect(out.metadata).toMatchObject({ collected: ["worker"], pending: [], timed_out: false })
         expect(out.output).toContain('"worker" is ready with no structured result yet')
@@ -144,7 +147,9 @@ describe("team collect", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
         const { lead } = await basic("collect-strict", "ready", { collect_strict: true })
@@ -154,9 +159,7 @@ describe("team collect", () => {
           return now
         })
 
-        const out = await (
-          await TeamCollectTool.init()
-        ).execute({ members: ["worker"], timeout_seconds: 10, poll_interval_seconds: 5 }, ctx(lead.id))
+        const out = await callTeamTool(TeamCollectTool, { members: ["worker"], timeout_seconds: 10, poll_interval_seconds: 5 }, ctx(lead.id))
 
         expect(out.metadata).toMatchObject({ collected: [], pending: ["worker"], timed_out: true })
         expect(out.output).toContain("fresh structured result")
@@ -172,14 +175,14 @@ describe("team collect", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
         const { lead, member } = await basic("collect-strict-claim", "ready", { collect_strict: true })
 
-        await (
-          await TeamSubmitResultTool.init()
-        ).execute(
+        await callTeamTool(TeamSubmitResultTool, 
           {
             title: "Old result",
             summary: "This should stop counting after a new claim.",
@@ -199,9 +202,7 @@ describe("team collect", () => {
           return now
         })
 
-        const out = await (
-          await TeamCollectTool.init()
-        ).execute({ members: ["worker"], timeout_seconds: 10, poll_interval_seconds: 5 }, ctx(lead.id))
+        const out = await callTeamTool(TeamCollectTool, { members: ["worker"], timeout_seconds: 10, poll_interval_seconds: 5 }, ctx(lead.id))
 
         expect(out.metadata).toMatchObject({ collected: [], pending: ["worker"], timed_out: true })
         expect(out.output).not.toContain("Old result")
@@ -218,12 +219,12 @@ describe("team collect", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("collect-strict-idle", "ready")
-        const out = await (
-          await TeamCollectTool.init()
-        ).execute(
+        const out = await callTeamTool(TeamCollectTool, 
           {
             members: ["worker"],
             require_structured_result: true,
@@ -244,12 +245,12 @@ describe("team collect", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("collect-waive")
-        const out = await (
-          await TeamCollectTool.init()
-        ).execute(
+        const out = await callTeamTool(TeamCollectTool, 
           {
             members: ["worker"],
             require_structured_result: true,
@@ -270,7 +271,9 @@ describe("team collect", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
         const { lead } = await basic("collect-timeout")
@@ -280,9 +283,7 @@ describe("team collect", () => {
           return now
         })
 
-        const out = await (
-          await TeamCollectTool.init()
-        ).execute({ timeout_seconds: 10, poll_interval_seconds: 5 }, ctx(lead.id))
+        const out = await callTeamTool(TeamCollectTool, { timeout_seconds: 10, poll_interval_seconds: 5 }, ctx(lead.id))
 
         expect(out.metadata).toMatchObject({ collected: [], pending: ["worker"], timed_out: true })
         expect(out.output).toContain("Pending: worker")
@@ -298,14 +299,14 @@ describe("team collect", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
         const { lead, member } = await basic("collect-stale")
 
-        await (
-          await TeamSubmitResultTool.init()
-        ).execute(
+        await callTeamTool(TeamSubmitResultTool, 
           {
             title: "Old result",
             summary: "This should not count anymore.",
@@ -329,9 +330,7 @@ describe("team collect", () => {
           return now
         })
 
-        const out = await (
-          await TeamCollectTool.init()
-        ).execute({ timeout_seconds: 10, poll_interval_seconds: 5 }, ctx(lead.id))
+        const out = await callTeamTool(TeamCollectTool, { timeout_seconds: 10, poll_interval_seconds: 5 }, ctx(lead.id))
 
         expect(out.metadata).toMatchObject({ collected: [], pending: ["worker"], timed_out: true })
         expect(out.output).not.toContain("Old result")
