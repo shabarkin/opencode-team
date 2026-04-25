@@ -1,15 +1,13 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Env } from "../../src/env"
 import { Global } from "../../src/global"
 import { Inbox } from "../../src/team/inbox"
 import { Instance } from "../../src/project/instance"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
-import { Session } from "../../src/session"
-import { Storage } from "../../src/storage/storage"
+import { Session, Storage } from "../../src/team/runtime"
 import { Team } from "../../src/team"
 import { TeamMessaging } from "../../src/team/messaging"
 import { tmpdir } from "../fixture/fixture"
@@ -58,7 +56,9 @@ describe("team phase 3", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         await Inbox.write("phase3-inbox", "worker", {
           id: "im_duplicate",
@@ -84,7 +84,9 @@ describe("team phase 3", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
@@ -136,7 +138,9 @@ describe("team phase 3", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
@@ -187,7 +191,9 @@ describe("team phase 3", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({
