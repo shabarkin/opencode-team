@@ -1541,7 +1541,14 @@ export class Agent implements ACPAgent {
         sessionID: params.sessionId,
         directory: session.cwd,
       },
-      { throwOnError: true },
+      {
+        throwOnError: true,
+        headers: {
+          // Tag the abort with the originating session so team-aware
+          // permission checks on the server side recognise the caller.
+          "x-opencode-session": params.sessionId,
+        },
+      },
     )
   }
 }

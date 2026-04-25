@@ -279,6 +279,12 @@ export const layer = Layer.effect(
         }
 
         const get = Effect.fnUntraced(function* (agent: string) {
+          if (agents[agent]) return agents[agent]
+          // Team feature uses transient agent names (lead/member labels)
+          // that don't match a configured agent key but do appear as the
+          // `name` field. Fall back to a unique name match.
+          const matches = Object.values(agents).filter((item) => item.name === agent)
+          if (matches.length === 1) return matches[0]
           return agents[agent]
         })
 
