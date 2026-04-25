@@ -27,6 +27,7 @@ import { BashTool } from "../../tool/bash"
 import { TodoWriteTool } from "../../tool/todo"
 import { Locale } from "../../util"
 import { AppRuntime } from "@/effect/app-runtime"
+import { childSession, teamTool } from "./tool-link"
 
 type ToolProps<T> = {
   input: Tool.InferParameters<T>
@@ -176,6 +177,21 @@ function task(info: ToolProps<typeof TaskTool>) {
   })
 }
 
+function team(info: ToolProps<unknown>) {
+  const item = teamTool(info.part)
+  if (!item) {
+    fallback(info.part)
+    return
+  }
+  const child = childSession(info.part)
+  const bits = [item.subtitle, child ? `session ${child}` : ""].filter(Boolean)
+  inline({
+    icon: item.icon,
+    title: item.title,
+    description: bits.join(" · ") || undefined,
+  })
+}
+
 function skill(info: ToolProps<typeof SkillTool>) {
   inline({
     icon: "→",
@@ -299,8 +315,14 @@ export const RunCommand = cmd({
         describe: "auto-approve permissions that are not explicitly denied (dangerous!)",
         default: false,
       })
+      .option("worktrees", {
+        type: "boolean",
+        default: false,
+        describe: "enable isolated teammate git worktrees for agent teams",
+      })
   },
   handler: async (args) => {
+    process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES = args.worktrees ? "true" : "false"
     let message = [...args.message, ...(args["--"] || [])]
       .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
       .join(" ")
@@ -418,6 +440,10 @@ export const RunCommand = cmd({
           if (part.tool === "codesearch") return codesearch(props<typeof CodeSearchTool>(part))
           if (part.tool === "websearch") return websearch(props<typeof WebSearchTool>(part))
           if (part.tool === "task") return task(props<typeof TaskTool>(part))
+          if (part.tool === "team_spawn") return team(props<unknown>(part))
+          if (part.tool === "team_request_spawn") return team(props<unknown>(part))
+          if (part.tool === "team_delegate") return team(props<unknown>(part))
+          if (part.tool === "team_create") return team(props<unknown>(part))
           if (part.tool === "todowrite") return todo(props<typeof TodoWriteTool>(part))
           if (part.tool === "skill") return skill(props<typeof SkillTool>(part))
           return fallback(part)
@@ -472,12 +498,13 @@ export const RunCommand = cmd({
 
             if (
               part.type === "tool" &&
-              part.tool === "task" &&
+              ["task", "team_spawn", "team_request_spawn", "team_delegate", "team_create"].includes(part.tool) &&
               part.state.status === "running" &&
               args.format !== "json"
             ) {
               if (toggles.get(part.id) === true) continue
-              task(props<typeof TaskTool>(part))
+              if (part.tool === "task") task(props<typeof TaskTool>(part))
+              else team(props<unknown>(part))
               toggles.set(part.id, true)
             }
 
