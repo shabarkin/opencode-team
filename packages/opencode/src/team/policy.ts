@@ -1,4 +1,4 @@
-import { Plugin } from "@/plugin"
+import { Plugin } from "./runtime"
 
 type SpawnInput = {
   teamName: string
@@ -105,7 +105,7 @@ export namespace TeamPolicy {
   }): Promise<{ allow: boolean; reason?: string }> {
     const { Team } = await import("./index")
     const { TeamScope } = await import("./scope")
-    const { Session } = await import("../session")
+    const { Session } = await import("./runtime")
     const { SessionID } = await import("../session/schema")
 
     const team = await Team.get(input.teamName)
