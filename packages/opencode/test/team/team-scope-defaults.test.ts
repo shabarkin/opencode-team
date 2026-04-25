@@ -1,11 +1,9 @@
 import { describe, expect, spyOn, test } from "bun:test"
-import { Env } from "../../src/env"
 import { Instance } from "../../src/project/instance"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
-import { Session } from "../../src/session"
-import { SessionPrompt } from "../../src/session/prompt"
+import { Session, SessionPrompt } from "../../src/team/runtime"
 import { Team } from "../../src/team"
 import { TeamPolicy } from "../../src/team/policy"
 import { DEFAULT_EXCLUDES, TeamScope } from "../../src/team/scope"
@@ -46,7 +44,9 @@ describe("team scope defaults", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
