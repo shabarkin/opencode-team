@@ -2,7 +2,35 @@ import fs from "fs/promises"
 import path from "path"
 import { Global } from "../global"
 import { Log } from "../util"
-import { git as runGit } from "../util/git"
+import { Process } from "../util"
+
+/**
+ * Promise-style `git` runner. Replaces the removed `util/git.ts` helper.
+ * Upstream now exposes git as a full Effect Service (`@/git`); the team
+ * worktree code is still Promise-based, so we keep a small Process.run
+ * wrapper here. TODO(team): port team/worktree.ts to use Git.Service
+ * directly.
+ */
+async function runGit(args: string[], opts: { cwd: string; env?: Record<string, string> }) {
+  return Process.run(["git", ...args], {
+    cwd: opts.cwd,
+    env: opts.env,
+    stdin: "ignore",
+    nothrow: true,
+  })
+    .then((result) => ({
+      exitCode: result.code,
+      text: () => result.stdout.toString(),
+      stdout: result.stdout,
+      stderr: result.stderr,
+    }))
+    .catch((error: unknown) => ({
+      exitCode: 1,
+      text: () => "",
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.from(error instanceof Error ? error.message : String(error)),
+    }))
+}
 
 const log = Log.create({ service: "team.worktree" })
 
