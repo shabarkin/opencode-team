@@ -66,6 +66,21 @@ IMPORTANT:
 
 const STRUCTURED_OUTPUT_SYSTEM_PROMPT = `IMPORTANT: The user has requested structured output. You MUST use the StructuredOutput tool to provide your final response. Do NOT respond with plain text - you MUST call the StructuredOutput tool with your answer formatted according to the schema.`
 
+const TEAM_HINT = [
+  /\b(agent team|team of agents|team of teammates|multiple agents|multiple teammates|teammates?)\b/i,
+  /\bdelegate(?:d|s|ion)?\b.*\b(agent|agents|teammate|teammates|task|work)\b/i,
+  /\b(orchestrate|orchestrator|coordinate)\b.*\b(agent|agents|team|teammate|teammates)\b/i,
+  /\bspawn\b.*\b(agent|teammate|teammates)\b/i,
+]
+
+function wantsTeam(parts: ReadonlyArray<{ type: string; text?: string }>) {
+  if (!Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS) return false
+  return parts.some(
+    (part) =>
+      part.type === "text" && typeof part.text === "string" && TEAM_HINT.some((pattern) => pattern.test(part.text!)),
+  )
+}
+
 const log = Log.create({ service: "session.prompt" })
 const elog = EffectLogger.create({ service: "session.prompt" })
 
@@ -964,6 +979,8 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         id: part.id ? PartID.make(part.id) : PartID.ascending(),
       })
 
+      const team = wantsTeam(input.parts)
+
       const resolvePart: (part: PromptInput["parts"][number]) => Effect.Effect<Draft<MessageV2.Part>[]> = Effect.fn(
         "SessionPrompt.resolveUserPart",
       )(function* (part) {
@@ -1212,6 +1229,10 @@ NOTE: At any point in time through this workflow you should feel free to ask the
         if (part.type === "agent") {
           const perm = Permission.evaluate("task", part.name, ag.permission)
           const hint = perm.action === "deny" ? " . Invoked by user; guaranteed to exist." : ""
+          const baseText = team
+            ? ` The above agent is available by exact name "${part.name}". The user explicitly asked for an agent team, so prefer team_create/team_spawn over the task tool and pass agent: "${part.name}" to team_spawn.`
+            : " Use the above message and context to generate a prompt and call the task tool with subagent: " +
+              part.name
           return [
             { ...part, messageID: info.id, sessionID: input.sessionID },
             {
@@ -1219,10 +1240,7 @@ NOTE: At any point in time through this workflow you should feel free to ask the
               sessionID: input.sessionID,
               type: "text",
               synthetic: true,
-              text:
-                " Use the above message and context to generate a prompt and call the task tool with subagent: " +
-                part.name +
-                hint,
+              text: baseText + hint,
             },
           ]
         }
