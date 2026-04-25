@@ -1,5 +1,5 @@
 import { Log } from "../util"
-import { Storage } from "../storage/storage"
+import { Storage } from "./runtime"
 import { Instance } from "../project/instance"
 
 const log = Log.create({ service: "team.notepad" })

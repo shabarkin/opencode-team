@@ -1,5 +1,5 @@
 import path from "path"
-import { Wildcard } from "../util/wildcard"
+import * as Wildcard from "../util/wildcard"
 import type { TeamScope as Scope } from "./events"
 
 export const DEFAULT_EXCLUDES = [".ananke/**", ".claude/**", ".opencode/**", ".git/**", "node_modules/**"]
