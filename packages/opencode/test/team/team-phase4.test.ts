@@ -1,14 +1,13 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import path from "path"
-import { Env } from "../../src/env"
 import { Inbox } from "../../src/team/inbox"
 import { Instance } from "../../src/project/instance"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
-import { Session } from "../../src/session"
-import { SessionPrompt } from "../../src/session/prompt"
+import { Session, SessionPrompt } from "../../src/team/runtime"
 import { SubmittedResultSchema, Team, TeamTasks } from "../../src/team"
+import { callTeamTool } from "./_tool-runtime"
 import { TeamPolicy } from "../../src/team/policy"
 import { TeamScope } from "../../src/team/scope"
 import { TeamCleanupTool, TeamShutdownTool, TeamSpawnTool } from "../../src/tool/team"
@@ -93,7 +92,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-inbox-list")
         await Inbox.write("phase4-inbox-list", "lead", {
@@ -105,7 +106,7 @@ describe("team phase 4", () => {
           priority: "urgent",
         })
 
-        const out = await (await TeamInboxTool.init()).execute({ action: "list" }, ctx(lead.id))
+        const out = await callTeamTool(TeamInboxTool, { action: "list" }, ctx(lead.id))
         expect(out.output).toContain("from=worker")
         expect(out.output).toContain("type=result")
         expect(out.output).toContain("priority=urgent")
@@ -120,7 +121,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-inbox-read")
         await Inbox.write("phase4-inbox-read", "lead", {
@@ -131,7 +134,7 @@ describe("team phase 4", () => {
           type: "result",
         })
 
-        const out = await (await TeamInboxTool.init()).execute({ action: "read" }, ctx(lead.id))
+        const out = await callTeamTool(TeamInboxTool, { action: "read" }, ctx(lead.id))
         expect(out.output).toContain("Detailed result body.")
         expect((await Inbox.unread("phase4-inbox-read", "lead")).length).toBe(0)
 
@@ -144,7 +147,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-inbox-read-limit")
         await Inbox.write("phase4-inbox-read-limit", "lead", {
@@ -166,7 +171,7 @@ describe("team phase 4", () => {
           timestamp: Date.now(),
         })
 
-        const out = await (await TeamInboxTool.init()).execute({ action: "read", limit: 2 }, ctx(lead.id))
+        const out = await callTeamTool(TeamInboxTool, { action: "read", limit: 2 }, ctx(lead.id))
         expect(out.output).toContain("Third unread body.")
         expect(out.output).toContain("Second unread body.")
         expect(out.output).not.toContain("First unread body.")
@@ -181,10 +186,12 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { member } = await basic("phase4-inbox-auth")
-        const out = await (await TeamInboxTool.init()).execute({ action: "list", member: "lead" }, ctx(member.id))
+        const out = await callTeamTool(TeamInboxTool, { action: "list", member: "lead" }, ctx(member.id))
         expect(out.title).toBe("Error")
         expect(out.output).toContain("Only the lead")
 
@@ -197,12 +204,12 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { member } = await basic("phase4-submit-result")
-        const out = await (
-          await TeamSubmitResultTool.init()
-        ).execute(
+        const out = await callTeamTool(TeamSubmitResultTool, 
           {
             title: "Audit complete",
             summary: "All planned checks passed.",
@@ -226,12 +233,12 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { member } = await basic("phase4-evidence-tier")
-        await (
-          await TeamSubmitResultTool.init()
-        ).execute(
+        await callTeamTool(TeamSubmitResultTool, 
           {
             title: "Audit complete",
             summary: "Everything that mattered is covered.",
@@ -254,16 +261,16 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { member } = await basic("phase4-submit-task")
         await TeamTasks.add("phase4-submit-task", [
           { id: "t1", content: "Ship it", status: "pending", priority: "high" },
         ])
 
-        await (
-          await TeamSubmitResultTool.init()
-        ).execute(
+        await callTeamTool(TeamSubmitResultTool, 
           {
             title: "Done",
             summary: "Task is finished.",
@@ -284,12 +291,12 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead, member } = await basic("phase4-wait-result")
-        await (
-          await TeamSubmitResultTool.init()
-        ).execute(
+        await callTeamTool(TeamSubmitResultTool, 
           {
             title: "Ready",
             summary: "A result is already waiting.",
@@ -298,7 +305,7 @@ describe("team phase 4", () => {
           ctx(member.id),
         )
 
-        const out = await (await TeamWaitTool.init()).execute({ for: "result", member: "worker" }, ctx(lead.id))
+        const out = await callTeamTool(TeamWaitTool, { for: "result", member: "worker" }, ctx(lead.id))
         expect(out.title).toBe("Condition met")
         expect(out.output).toContain('Found a result from "worker"')
 
@@ -311,10 +318,12 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-wait-empty")
-        const out = await (await TeamWaitTool.init()).execute({ for: "any_message" }, ctx(lead.id))
+        const out = await callTeamTool(TeamWaitTool, { for: "any_message" }, ctx(lead.id))
         expect(out.title).toBe("Condition not met")
         expect(out.output).toContain("No unread messages")
 
@@ -345,7 +354,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const a = await Session.create({ parentID: lead.id })
@@ -357,7 +368,7 @@ describe("team phase 4", () => {
         await Team.setMemberResultAt("phase4-shutdown-all", "b", Date.now())
 
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
-        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownAllTool, {}, ctx(lead.id))
         expect(out.output).toContain("Requested shutdown for 2 teammate")
         expect(out.output).toContain("call team_cleanup to end team mode")
         expect(shut).toHaveBeenCalledTimes(2)
@@ -372,7 +383,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-shutdown-defer", "busy")
         await TeamTasks.add("phase4-shutdown-defer", [
@@ -380,7 +393,7 @@ describe("team phase 4", () => {
         ])
 
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
-        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownAllTool, {}, ctx(lead.id))
         expect(out.title).toBe("Shutdown deferred")
         expect(out.output).toContain("worker")
         expect(out.output).toContain("not yet reported completion")
@@ -397,7 +410,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-shutdown-needs-result", "busy", {
           require_result_before_shutdown: true,
@@ -406,7 +421,7 @@ describe("team phase 4", () => {
           { id: "review", content: "Finish the review", status: "in_progress", priority: "high", assignee: "worker" },
         ])
 
-        const out = await (await TeamShutdownTool.init()).execute({ name: "worker" }, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownTool, { name: "worker" }, ctx(lead.id))
         expect(out.title).toBe("Shutdown blocked")
         expect(out.output).toContain("requires a submitted result")
         expect(
@@ -422,15 +437,15 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead, member } = await basic("phase4-shutdown-stale-result", "ready", {
           require_result_before_shutdown: true,
         })
 
-        await (
-          await TeamSubmitResultTool.init()
-        ).execute(
+        await callTeamTool(TeamSubmitResultTool, 
           {
             title: "Old result",
             summary: "This should stop counting after a new claim.",
@@ -444,7 +459,7 @@ describe("team phase 4", () => {
         ])
         await TeamTasks.claim("phase4-shutdown-stale-result", "review", "worker")
 
-        const out = await (await TeamShutdownTool.init()).execute({ name: "worker" }, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownTool, { name: "worker" }, ctx(lead.id))
         expect(out.title).toBe("Shutdown blocked")
         expect(out.output).toContain("requires a submitted result")
 
@@ -457,7 +472,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-shutdown-noise", "busy")
         await TeamTasks.add("phase4-shutdown-noise", [
@@ -475,7 +492,7 @@ describe("team phase 4", () => {
         }
 
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
-        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownAllTool, {}, ctx(lead.id))
         expect(out.output).toContain("Repeated error/noise detected")
         expect(shut).toHaveBeenCalledTimes(1)
 
@@ -489,7 +506,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-shutdown-stale", "busy")
         await TeamTasks.add("phase4-shutdown-stale", [
@@ -508,7 +527,7 @@ describe("team phase 4", () => {
         await Inbox.markRead("phase4-shutdown-stale", "lead")
 
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
-        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownAllTool, {}, ctx(lead.id))
         expect(out.title).toBe("Shutdown deferred")
         expect(shut).not.toHaveBeenCalled()
 
@@ -522,7 +541,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-shutdown-deadline", "busy")
         await TeamTasks.add("phase4-shutdown-deadline", [
@@ -540,7 +561,7 @@ describe("team phase 4", () => {
         }
 
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
-        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownAllTool, {}, ctx(lead.id))
         expect(out.title).toBe("Shutdown deferred")
         expect(shut).not.toHaveBeenCalled()
 
@@ -554,12 +575,14 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-shutdown-ready", "ready")
 
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
-        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownAllTool, {}, ctx(lead.id))
         expect(out.title).toBe("Shutdown deferred")
         expect(out.output).toContain("worker")
         expect(shut).not.toHaveBeenCalled()
@@ -574,13 +597,15 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-shutdown-busy-done", "busy")
         await Team.setMemberResultAt("phase4-shutdown-busy-done", "worker", Date.now())
 
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
-        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownAllTool, {}, ctx(lead.id))
         expect(out.title).toBe("Shutdown requested for all teammates")
         expect(out.output).toContain("Requested shutdown for 1 teammate")
         expect(shut).toHaveBeenCalledTimes(1)
@@ -595,7 +620,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
@@ -613,7 +640,7 @@ describe("team phase 4", () => {
         })
 
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
-        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownAllTool, {}, ctx(lead.id))
         expect(out.title).toBe("Shutdown requested for all teammates")
         expect(out.output).toContain("done or ready to wrap up")
         expect(shut).toHaveBeenCalledTimes(1)
@@ -628,14 +655,16 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-shutdown-lifecycle", "busy")
         await Team.setMemberResultAt("phase4-shutdown-lifecycle", "worker", Date.now())
         await Team.setMemberStatus("phase4-shutdown-lifecycle", "worker", "ready")
 
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "requested" })
-        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownAllTool, {}, ctx(lead.id))
         expect(out.title).toBe("Shutdown requested for all teammates")
         expect(out.output).toContain("done or ready to wrap up")
         expect(shut).toHaveBeenCalledTimes(1)
@@ -650,7 +679,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-shutdown-storm-blocked", "busy")
         await TeamTasks.add("phase4-shutdown-storm-blocked", [
@@ -668,7 +699,7 @@ describe("team phase 4", () => {
         }
 
         const shut = spyOn(Team, "shutdown").mockResolvedValue({ status: "blocked", reason: "policy denied" })
-        const out = await (await TeamShutdownAllTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownAllTool, {}, ctx(lead.id))
         expect(out.output).toContain("Repeated error/noise detected")
         expect(out.output).toContain("Blocked")
         expect(out.output).toContain("consider force=true")
@@ -683,11 +714,13 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-shutdown-force")
         const force = spyOn(Team, "forceShutdownAll").mockResolvedValue({ shutdown: ["worker"], pending: [] })
-        const out = await (await TeamShutdownAllTool.init()).execute({ force: true }, ctx(lead.id))
+        const out = await callTeamTool(TeamShutdownAllTool, { force: true }, ctx(lead.id))
         expect(out.output).toContain("Force shutdown")
         expect(out.output).toContain("call team_cleanup to end team mode")
         expect(force).toHaveBeenCalledWith("phase4-shutdown-force", undefined)
@@ -702,7 +735,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-cleanup-force")
         const force = spyOn(Team, "forceShutdownAll").mockImplementation(async (teamName, _reason) => {
@@ -710,9 +745,7 @@ describe("team phase 4", () => {
           return { shutdown: ["worker"], pending: [] }
         })
 
-        const out = await (
-          await TeamCleanupTool.init()
-        ).execute({ name: "phase4-cleanup-force", force: true }, ctx(lead.id))
+        const out = await callTeamTool(TeamCleanupTool, { name: "phase4-cleanup-force", force: true }, ctx(lead.id))
         expect(out.title).toContain("Team cleaned up")
         expect(out.output).toContain("Resume normal non-team chat behavior")
         expect(force).toHaveBeenCalled()
@@ -727,10 +760,12 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-cleanup-block")
-        const out = await (await TeamCleanupTool.init()).execute({ name: "phase4-cleanup-block" }, ctx(lead.id))
+        const out = await callTeamTool(TeamCleanupTool, { name: "phase4-cleanup-block" }, ctx(lead.id))
         expect(out.title).toBe("Cleanup failed")
         expect(out.output).toContain("Shut them down first")
         expect((await Team.get("phase4-cleanup-block"))?.team_phase).toBeUndefined()
@@ -744,7 +779,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead } = await basic("phase4-cleanup-race")
         await Team.setMemberStatus("phase4-cleanup-race", "worker", "shutdown")
@@ -807,7 +844,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
@@ -849,7 +888,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead, member } = await basic("phase4-policy-path")
         await Team.removeMember("phase4-policy-path", "worker")
@@ -882,10 +923,12 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { member } = await basic("phase4-phase")
-        const out = await (await TeamPhaseTool.init()).execute({ phase: "testing" }, ctx(member.id))
+        const out = await callTeamTool(TeamPhaseTool, { phase: "testing" }, ctx(member.id))
         expect(out.title).toContain("Phase updated")
         expect((await Team.get("phase4-phase"))?.members.find((item) => item.name === "worker")?.phase).toBe("testing")
 
@@ -898,7 +941,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead, member } = await basic("phase4-status")
         await Team.removeMember("phase4-status", "worker")
@@ -915,7 +960,7 @@ describe("team phase 4", () => {
         })
         await Team.setTeamPhase("phase4-status", "delivery")
 
-        const out = await (await TeamStatusTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamStatusTool, {}, ctx(lead.id))
         expect(out.output).toContain("phase=testing")
         expect(out.output).toContain("last_result=")
         expect(out.output).toContain("team_phase=delivery")
@@ -930,7 +975,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const { lead, member } = await basic("phase4-error-hint")
         await Team.removeMember("phase4-error-hint", "worker")
@@ -945,7 +992,7 @@ describe("team phase 4", () => {
           error_kind: "timeout",
         })
 
-        const out = await (await TeamStatusTool.init()).execute({}, ctx(lead.id))
+        const out = await callTeamTool(TeamStatusTool, {}, ctx(lead.id))
         expect(out.output).toContain("team_restart or team_shutdown")
         expect(out.output).toContain("review session log")
         expect(out.output).toContain("error_kind=timeout")
@@ -959,7 +1006,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
@@ -1005,7 +1054,9 @@ describe("team phase 4", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
