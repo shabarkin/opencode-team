@@ -1,5 +1,22 @@
 import z from "zod"
+import { Schema } from "effect"
+import { ZodOverride } from "@/util/effect-zod"
 import { BusEvent } from "../bus/bus-event"
+
+/**
+ * Bridge a zod schema as an Effect Schema so it satisfies `BusEvent.define`'s
+ * `Schema.Top` constraint without rewriting every nested zod type. The
+ * `ZodOverride` annotation lets the effect-zod walker emit the original zod
+ * shape when this schema is later projected to JSON Schema.
+ *
+ * Why: events.ts predates the v1.14.23 tool-framework migration and still uses
+ * zod throughout. Every `.parse()` / `.safeParse()` / `.omit()` / `.extend()`
+ * consumer in `team/index.ts` would need rewriting otherwise.
+ */
+const fromZod = <T>(schema: z.ZodType<T>) =>
+  Schema.declare<T>((u): u is T => schema.safeParse(u).success).annotate({
+    [ZodOverride]: schema,
+  })
 
 export const MemberStatus = z.enum(["ready", "busy", "paused", "shutdown_requested", "shutdown", "error"])
 export type MemberStatus = z.infer<typeof MemberStatus>
@@ -193,189 +210,229 @@ export type TeamTask = z.infer<typeof TeamTaskSchema>
 export namespace TeamEvent {
   export const Created = BusEvent.define(
     "team.created",
-    z.object({
-      team: TeamInfoSchema,
-    }),
+    fromZod(
+      z.object({
+        team: TeamInfoSchema,
+      }),
+    ),
   )
 
   export const MemberSpawned = BusEvent.define(
     "team.member.spawned",
-    z.object({
-      teamName: z.string(),
-      member: TeamMemberSchema,
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        member: TeamMemberSchema,
+      }),
+    ),
   )
 
   export const MemberStatusChanged = BusEvent.define(
     "team.member.status",
-    z.object({
-      teamName: z.string(),
-      memberName: z.string(),
-      status: MemberStatus,
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        memberName: z.string(),
+        status: MemberStatus,
+      }),
+    ),
   )
 
   export const MemberExecutionChanged = BusEvent.define(
     "team.member.execution",
-    z.object({
-      teamName: z.string(),
-      memberName: z.string(),
-      status: ExecutionStatus,
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        memberName: z.string(),
+        status: ExecutionStatus,
+      }),
+    ),
   )
 
   export const Message = BusEvent.define(
     "team.message",
-    z.object({
-      teamName: z.string(),
-      from: z.string(),
-      to: z.string(),
-      text: z.string(),
-      type: MessageType.optional(),
-      priority: MessagePriority.optional(),
-      threadId: z.string().optional(),
-      replyTo: z.string().optional(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        from: z.string(),
+        to: z.string(),
+        text: z.string(),
+        type: MessageType.optional(),
+        priority: MessagePriority.optional(),
+        threadId: z.string().optional(),
+        replyTo: z.string().optional(),
+      }),
+    ),
   )
 
   export const Broadcast = BusEvent.define(
     "team.broadcast",
-    z.object({
-      teamName: z.string(),
-      from: z.string(),
-      text: z.string(),
-      type: MessageType.optional(),
-      priority: MessagePriority.optional(),
-      threadId: z.string().optional(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        from: z.string(),
+        text: z.string(),
+        type: MessageType.optional(),
+        priority: MessagePriority.optional(),
+        threadId: z.string().optional(),
+      }),
+    ),
   )
 
   export const TaskUpdated = BusEvent.define(
     "team.task.updated",
-    z.object({
-      teamName: z.string(),
-      tasks: z.array(TeamTaskSchema),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        tasks: z.array(TeamTaskSchema),
+      }),
+    ),
   )
 
   export const TaskClaimed = BusEvent.define(
     "team.task.claimed",
-    z.object({
-      teamName: z.string(),
-      taskId: z.string(),
-      memberName: z.string(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        taskId: z.string(),
+        memberName: z.string(),
+      }),
+    ),
   )
 
   export const SpawnRequested = BusEvent.define(
     "team.spawn.requested",
-    z.object({
-      teamName: z.string(),
-      request: PendingSpawnRequestSchema,
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        request: PendingSpawnRequestSchema,
+      }),
+    ),
   )
 
   export const ShutdownRequest = BusEvent.define(
     "team.shutdown.request",
-    z.object({
-      teamName: z.string(),
-      memberName: z.string(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        memberName: z.string(),
+      }),
+    ),
   )
 
   export const PlanApproval = BusEvent.define(
     "team.plan.approval",
-    z.object({
-      teamName: z.string(),
-      memberName: z.string(),
-      approved: z.boolean(),
-      feedback: z.string().optional(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        memberName: z.string(),
+        approved: z.boolean(),
+        feedback: z.string().optional(),
+      }),
+    ),
   )
 
   export const ResultSubmitted = BusEvent.define(
     "team.result.submitted",
-    z.object({
-      teamName: z.string(),
-      memberName: z.string(),
-      result: SubmittedResultSchema,
-      taskId: z.string().optional(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        memberName: z.string(),
+        result: SubmittedResultSchema,
+        taskId: z.string().optional(),
+      }),
+    ),
   )
 
   export const MessageUndelivered = BusEvent.define(
     "team.message.undelivered",
-    z.object({
-      teamName: z.string(),
-      from: z.string(),
-      to: z.string(),
-      messageID: z.string(),
-      error: z.string().optional(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        from: z.string(),
+        to: z.string(),
+        messageID: z.string(),
+        error: z.string().optional(),
+      }),
+    ),
   )
 
   export const MessageRead = BusEvent.define(
     "team.message.read",
-    z.object({
-      teamName: z.string(),
-      agentName: z.string(),
-      count: z.number(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        agentName: z.string(),
+        count: z.number(),
+      }),
+    ),
   )
 
   export const Cleaned = BusEvent.define(
     "team.cleaned",
-    z.object({
-      teamName: z.string(),
-      leadSessionID: z.string(),
-      delegate: z.boolean(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        leadSessionID: z.string(),
+        delegate: z.boolean(),
+      }),
+    ),
   )
 
   export const AllMembersShutdown = BusEvent.define(
     "team.all-members-shutdown",
-    z.object({
-      teamName: z.string(),
-      leadSessionID: z.string(),
-      grace: z.number(),
-      cleanupAt: z.number(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        leadSessionID: z.string(),
+        grace: z.number(),
+        cleanupAt: z.number(),
+      }),
+    ),
   )
 
   export const MemberTimeout = BusEvent.define(
     "team.member.timeout",
-    z.object({
-      teamName: z.string(),
-      memberName: z.string(),
-      elapsed: z.number(),
-      limit: z.number(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        memberName: z.string(),
+        elapsed: z.number(),
+        limit: z.number(),
+      }),
+    ),
   )
 
   export const FileConflict = BusEvent.define(
     "team.file.conflict",
-    z.object({
-      teamName: z.string(),
-      filepath: z.string(),
-      members: z.array(z.string()),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        filepath: z.string(),
+        members: z.array(z.string()),
+      }),
+    ),
   )
 
   export const InboxPruned = BusEvent.define(
     "team.inbox.pruned",
-    z.object({
-      teamName: z.string(),
-      agentName: z.string(),
-      removed: z.number(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        agentName: z.string(),
+        removed: z.number(),
+      }),
+    ),
   )
 
   export const TeamPhaseChanged = BusEvent.define(
     "team.phase.changed",
-    z.object({
-      teamName: z.string(),
-      phase: TeamPhaseLevel,
-      previous: TeamPhaseLevel.optional(),
-    }),
+    fromZod(
+      z.object({
+        teamName: z.string(),
+        phase: TeamPhaseLevel,
+        previous: TeamPhaseLevel.optional(),
+      }),
+    ),
   )
 }
