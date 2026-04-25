@@ -13,10 +13,10 @@ import {
   addDelegateRules,
   removeDelegateRules,
 } from "@/team"
-import { Session } from "@/session"
+import { Session } from "@/team/runtime"
 import { SessionID } from "@/session/schema"
-import { lazy } from "../../util/lazy"
-import { errors } from "../error"
+import { lazy } from "@/util/lazy"
+import { errors } from "../../error"
 import { caller } from "./caller"
 
 const Delegate = z.object({ enabled: z.boolean() })
