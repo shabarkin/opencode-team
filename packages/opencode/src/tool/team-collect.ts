@@ -1,7 +1,7 @@
-import z from "zod"
+import { Effect, Schema } from "effect"
+import * as Tool from "./tool"
 import { Inbox } from "../team/inbox"
-import { MemberNameSchema, Team } from "../team"
-import { Tool } from "./tool"
+import { Team } from "../team"
 
 function picks(team: Awaited<ReturnType<typeof Team.get>>, members?: string[]) {
   if (!team) return { ok: false as const, error: "Team not found." }
@@ -99,106 +99,119 @@ function text(state: ReturnType<typeof scan>, timedOut: boolean) {
     .join("\n")
 }
 
-export const TeamCollectTool = Tool.define("team_collect", {
-  description:
-    "Wait for teammate results and return a consolidated collection summary. " +
-    "This is the lead's synthesis gate: use it after spawning teammates and before you synthesize the final answer, instead of replacing teammate work with fresh hands-on investigation by the lead.",
-  parameters: z.object({
-    members: z
-      .array(MemberNameSchema)
-      .optional()
-      .describe("Optional teammate names to wait for. Defaults to all non-shutdown teammates."),
-    require_structured_result: z
-      .boolean()
-      .optional()
-      .describe("If true, only fresh structured results count as collected unless explicitly waived."),
-    allow_idle_without_result: z
-      .boolean()
-      .optional()
-      .describe("If true, ready or shutdown teammates may still count as collected without a fresh result."),
-    waive: z
-      .array(MemberNameSchema)
-      .optional()
-      .describe("Optional teammate names to treat as collected without a fresh structured result."),
-    timeout_seconds: z.number().int().min(10).max(600).optional(),
-    poll_interval_seconds: z.number().int().min(5).max(60).optional(),
+export const Parameters = Schema.Struct({
+  members: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Optional teammate names to wait for. Defaults to all non-shutdown teammates.",
   }),
-  async execute(params, ctx): Promise<{ title: string; output: string; metadata: Record<string, unknown> }> {
-    const info = await Team.findBySession(ctx.sessionID)
-    if (!info || info.role !== "lead") {
-      return { title: "Error", output: "Only the team lead can collect teammate results.", metadata: {} }
-    }
-
-    const team = await Team.get(info.team.name)
-    const target = picks(team, params.members)
-    if (!target.ok) {
-      return { title: "Error", output: target.error, metadata: {} }
-    }
-    if (target.names.length === 0) {
-      return {
-        title: "Nothing to collect",
-        output: "There are no active teammates to collect from.",
-        metadata: { collected: [], pending: [], timed_out: false },
-      }
-    }
-    if (!team) {
-      return { title: "Error", output: `Team "${info.team.name}" not found.`, metadata: {} }
-    }
-
-    const waive = picked(team, target.names, [...new Set(params.waive ?? [])])
-    if (!waive.ok) {
-      return { title: "Error", output: waive.error, metadata: {} }
-    }
-
-    const strict = params.require_structured_result ?? team.collect_strict ?? false
-    const idle = params.allow_idle_without_result ?? !strict
-
-    await Team.setTeamPhase(info.team.name, "synthesis")
-
-    const stop = Date.now() + (params.timeout_seconds ?? 300) * 1000
-    const poll = (params.poll_interval_seconds ?? 10) * 1000
-
-    while (true) {
-      const next = await Team.get(info.team.name)
-      if (!next) {
-        return { title: "Error", output: `Team "${info.team.name}" not found.`, metadata: {} }
-      }
-
-      const state = scan(next, await Inbox.all(info.team.name, "lead"), target.names, {
-        strict,
-        idle,
-        waive: waive.names,
-      })
-      if (state.pending.length === 0) {
-        await Team.setDelivered(info.team.name, true)
-        return {
-          title: "Collected team results",
-          output: text(state, false),
-          metadata: {
-            collected: state.collected,
-            pending: state.pending,
-            strict,
-            timed_out: false,
-            waive: [...waive.names],
-          },
-        }
-      }
-
-      if (Date.now() >= stop) {
-        return {
-          title: "Team collection timed out",
-          output: text(state, true),
-          metadata: {
-            collected: state.collected,
-            pending: state.pending,
-            strict,
-            timed_out: true,
-            waive: [...waive.names],
-          },
-        }
-      }
-
-      await Bun.sleep(poll)
-    }
-  },
+  require_structured_result: Schema.optional(Schema.Boolean).annotate({
+    description: "If true, only fresh structured results count as collected unless explicitly waived.",
+  }),
+  allow_idle_without_result: Schema.optional(Schema.Boolean).annotate({
+    description: "If true, ready or shutdown teammates may still count as collected without a fresh result.",
+  }),
+  waive: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
+    description: "Optional teammate names to treat as collected without a fresh structured result.",
+  }),
+  timeout_seconds: Schema.optional(Schema.Number),
+  poll_interval_seconds: Schema.optional(Schema.Number),
 })
+
+type Metadata = {
+  collected?: string[]
+  pending?: string[]
+  strict?: boolean
+  timed_out?: boolean
+  waive?: string[]
+}
+
+export const TeamCollectTool = Tool.define<typeof Parameters, Metadata, never>(
+  "team_collect",
+  Effect.gen(function* () {
+    return {
+      description:
+        "Wait for teammate results and return a consolidated collection summary. " +
+        "This is the lead's synthesis gate: use it after spawning teammates and before you synthesize the final answer, instead of replacing teammate work with fresh hands-on investigation by the lead.",
+      parameters: Parameters,
+      execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
+        Effect.gen(function* () {
+          const info = yield* Effect.promise(() => Team.findBySession(ctx.sessionID))
+          if (!info || info.role !== "lead") {
+            return { title: "Error", output: "Only the team lead can collect teammate results.", metadata: {} }
+          }
+
+          const team = yield* Effect.promise(() => Team.get(info.team.name))
+          const target = picks(team, params.members as string[] | undefined)
+          if (!target.ok) {
+            return { title: "Error", output: target.error, metadata: {} }
+          }
+          if (target.names.length === 0) {
+            return {
+              title: "Nothing to collect",
+              output: "There are no active teammates to collect from.",
+              metadata: { collected: [], pending: [], timed_out: false },
+            }
+          }
+          if (!team) {
+            return { title: "Error", output: `Team "${info.team.name}" not found.`, metadata: {} }
+          }
+
+          const waive = picked(team, target.names, [...new Set((params.waive as string[] | undefined) ?? [])])
+          if (!waive.ok) {
+            return { title: "Error", output: waive.error, metadata: {} }
+          }
+
+          const strict = params.require_structured_result ?? team.collect_strict ?? false
+          const idle = params.allow_idle_without_result ?? !strict
+
+          yield* Effect.promise(() => Team.setTeamPhase(info.team.name, "synthesis"))
+
+          const stop = Date.now() + (params.timeout_seconds ?? 300) * 1000
+          const poll = (params.poll_interval_seconds ?? 10) * 1000
+
+          while (true) {
+            const next = yield* Effect.promise(() => Team.get(info.team.name))
+            if (!next) {
+              return { title: "Error", output: `Team "${info.team.name}" not found.`, metadata: {} }
+            }
+
+            const items = yield* Effect.promise(() => Inbox.all(info.team.name, "lead"))
+            const state = scan(next, items, target.names, {
+              strict,
+              idle,
+              waive: waive.names,
+            })
+            if (state.pending.length === 0) {
+              yield* Effect.promise(() => Team.setDelivered(info.team.name, true))
+              return {
+                title: "Collected team results",
+                output: text(state, false),
+                metadata: {
+                  collected: state.collected,
+                  pending: state.pending,
+                  strict,
+                  timed_out: false,
+                  waive: [...waive.names],
+                },
+              }
+            }
+
+            if (Date.now() >= stop) {
+              return {
+                title: "Team collection timed out",
+                output: text(state, true),
+                metadata: {
+                  collected: state.collected,
+                  pending: state.pending,
+                  strict,
+                  timed_out: true,
+                  waive: [...waive.names],
+                },
+              }
+            }
+
+            yield* Effect.sleep(`${poll} millis`)
+          }
+        }).pipe(Effect.orDie),
+    } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>
+  }),
+)
