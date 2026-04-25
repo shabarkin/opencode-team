@@ -1,12 +1,10 @@
 import { describe, expect, spyOn, test } from "bun:test"
-import { Env } from "../../src/env"
 import { Inbox } from "../../src/team/inbox"
 import { Instance } from "../../src/project/instance"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
-import { Session } from "../../src/session"
-import { SessionPrompt } from "../../src/session/prompt"
+import { Session, SessionPrompt } from "../../src/team/runtime"
 import { Team } from "../../src/team"
 import { TeamMessaging } from "../../src/team/messaging"
 import { tmpdir } from "../fixture/fixture"
@@ -67,7 +65,9 @@ describe("team messaging filter", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const { member } = await basic("messaging-filter")
@@ -99,7 +99,9 @@ describe("team messaging filter", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         await basic("receipts-off")
 
@@ -121,7 +123,9 @@ describe("team messaging filter", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const { lead } = await basic("receipts-on", true)
