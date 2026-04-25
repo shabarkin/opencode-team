@@ -1,12 +1,11 @@
 import { describe, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Env } from "../../src/env"
 import { Instance } from "../../src/project/instance"
-import { Session } from "../../src/session"
+import { Session } from "../../src/team/runtime"
 import { Team } from "../../src/team"
 import { TeamWorktree } from "../../src/team/worktree"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
@@ -49,7 +48,9 @@ describe("team merge", () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await Team.create({ name: "merge-empty", leadSessionID: lead.id, worktrees: true })
@@ -75,7 +76,9 @@ describe("team merge", () => {
 
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await Team.create({ name: "merge-dirty", leadSessionID: lead.id, worktrees: true })
@@ -106,7 +109,9 @@ describe("team merge", () => {
 
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await Team.create({ name: "merge-conflict", leadSessionID: lead.id, worktrees: true })
@@ -143,7 +148,9 @@ describe("team merge", () => {
 
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await Team.create({ name: "merge-continue", leadSessionID: lead.id, worktrees: true })
@@ -180,7 +187,9 @@ describe("team merge", () => {
 
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await Team.create({ name: "merge-manual", leadSessionID: lead.id, worktrees: true })
@@ -216,7 +225,9 @@ describe("team merge", () => {
     await using tmp = await tmpdir({ git: true })
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await Team.create({ name: "merge-cleanup", leadSessionID: lead.id, worktrees: true })
