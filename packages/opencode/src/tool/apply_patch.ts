@@ -13,6 +13,7 @@ import { AppFileSystem } from "@opencode-ai/shared/filesystem"
 import DESCRIPTION from "./apply_patch.txt"
 import { File } from "../file"
 import { Format } from "../format"
+import { permPath } from "./perm"
 import * as Bom from "@/util/bom"
 
 export const Parameters = Schema.Struct({
@@ -196,7 +197,7 @@ export const ApplyPatchTool = Tool.define(
       }))
 
       // Check permissions if needed
-      const relativePaths = fileChanges.map((c) => path.relative(Instance.worktree, c.filePath).replaceAll("\\", "/"))
+      const relativePaths = fileChanges.map((c) => permPath(c.filePath))
       yield* ctx.ask({
         permission: "edit",
         patterns: relativePaths,
@@ -210,20 +211,23 @@ export const ApplyPatchTool = Tool.define(
 
       // Apply the changes
       const updates: Array<{ file: string; event: "add" | "change" | "unlink" }> = []
+      const edited: string[] = []
 
       for (const change of fileChanges) {
-        const edited = change.type === "delete" ? undefined : (change.movePath ?? change.filePath)
+        const target = change.type === "delete" ? undefined : (change.movePath ?? change.filePath)
         switch (change.type) {
           case "add":
             // Create parent directories (recursive: true is safe on existing/root dirs)
 
             yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
             updates.push({ file: change.filePath, event: "add" })
+            edited.push(change.filePath)
             break
 
           case "update":
             yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
             updates.push({ file: change.filePath, event: "change" })
+            edited.push(change.filePath)
             break
 
           case "move":
@@ -234,21 +238,26 @@ export const ApplyPatchTool = Tool.define(
               yield* afs.remove(change.filePath)
               updates.push({ file: change.filePath, event: "unlink" })
               updates.push({ file: change.movePath, event: "add" })
+              edited.push(change.filePath, change.movePath)
             }
             break
 
           case "delete":
             yield* afs.remove(change.filePath)
             updates.push({ file: change.filePath, event: "unlink" })
+            edited.push(change.filePath)
             break
         }
 
-        if (edited) {
-          if (yield* format.file(edited)) {
-            yield* Bom.syncFile(afs, edited, change.bom)
+        if (target) {
+          if (yield* format.file(target)) {
+            yield* Bom.syncFile(afs, target, change.bom)
           }
-          yield* bus.publish(File.Event.Edited, { file: edited, sessionID: ctx.sessionID })
         }
+      }
+
+      for (const file of edited) {
+        yield* bus.publish(File.Event.Edited, { file, sessionID: ctx.sessionID })
       }
 
       // Publish file change events
@@ -267,13 +276,13 @@ export const ApplyPatchTool = Tool.define(
       // Generate output summary
       const summaryLines = fileChanges.map((change) => {
         if (change.type === "add") {
-          return `A ${path.relative(Instance.worktree, change.filePath).replaceAll("\\", "/")}`
+          return `A ${permPath(change.filePath)}`
         }
         if (change.type === "delete") {
-          return `D ${path.relative(Instance.worktree, change.filePath).replaceAll("\\", "/")}`
+          return `D ${permPath(change.filePath)}`
         }
         const target = change.movePath ?? change.filePath
-        return `M ${path.relative(Instance.worktree, target).replaceAll("\\", "/")}`
+        return `M ${permPath(target)}`
       })
       let output = `Success. Updated the following files:\n${summaryLines.join("\n")}`
 
@@ -282,8 +291,7 @@ export const ApplyPatchTool = Tool.define(
         const target = change.movePath ?? change.filePath
         const block = LSP.Diagnostic.report(target, diagnostics[AppFileSystem.normalizePath(target)] ?? [])
         if (!block) continue
-        const rel = path.relative(Instance.worktree, target).replaceAll("\\", "/")
-        output += `\n\nLSP errors detected in ${rel}, please fix:\n${block}`
+        output += `\n\nLSP errors detected in ${permPath(target)}, please fix:\n${block}`
       }
 
       return {
