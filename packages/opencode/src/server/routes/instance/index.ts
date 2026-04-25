@@ -28,6 +28,7 @@ import { ExperimentalRoutes } from "./experimental"
 import { ProviderRoutes } from "./provider"
 import { EventRoutes } from "./event"
 import { SyncRoutes } from "./sync"
+import { TeamRoutes } from "./team"
 import { InstanceMiddleware } from "./middleware"
 import { jsonRequest } from "./trace"
 
@@ -56,7 +57,7 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket): Hono => {
     app.get(McpPaths.status, (c) => handler(c.req.raw, context))
   }
 
-  return app
+  const base = app
     .route("/project", ProjectRoutes())
     .route("/pty", PtyRoutes(upgrade))
     .route("/config", ConfigRoutes())
@@ -70,6 +71,12 @@ export const InstanceRoutes = (upgrade: UpgradeWebSocket): Hono => {
     .route("/", EventRoutes())
     .route("/mcp", McpRoutes())
     .route("/tui", TuiRoutes())
+
+  if (Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS) {
+    base.route("/team", TeamRoutes())
+  }
+
+  return base
     .post(
       "/instance/dispose",
       describeRoute({
