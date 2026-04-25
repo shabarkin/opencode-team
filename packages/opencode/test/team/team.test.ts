@@ -2,8 +2,7 @@ import { describe, expect, test, spyOn } from "bun:test"
 import path from "path"
 import { Instance } from "../../src/project/instance"
 import { Team, TeamTasks } from "../../src/team"
-import { Env } from "../../src/env"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 import {
   TeamCreateTool,
   TeamSpawnTool,
@@ -17,19 +16,17 @@ import {
   TeamCleanupTool,
 } from "../../src/tool/team"
 import { TeamCollectTool } from "../../src/tool/team-collect"
-import { Session } from "../../src/session"
-import { SessionPrompt } from "../../src/session/prompt"
-import { SessionStatus } from "../../src/session/status"
+import { Session, SessionPrompt, SessionStatus, Storage } from "../../src/team/runtime"
 import { TeamNotepad } from "../../src/team/notepad"
 import { TeamMessaging } from "../../src/team/messaging"
 import { TeamStatusTool } from "../../src/tool/team-status"
 import { TeamNotepadTool } from "../../src/tool/team-notepad"
-import { Storage } from "../../src/storage/storage"
 import { Bus } from "../../src/bus"
 import { TeamEvent } from "../../src/team/events"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { ProviderID, ModelID } from "../../src/provider/schema"
 import { tmpdir } from "../fixture/fixture"
+import { callTeamTool } from "./_tool-runtime"
 
 Log.init({ print: false })
 
@@ -62,7 +59,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const team = await Team.create({
@@ -89,7 +86,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const team = await Team.get("non-existent")
@@ -102,7 +99,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "dup-team", leadSessionID: "ses_1" })
@@ -119,7 +116,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         for (const name of ["../escape", "bad/name", "Upper"]) {
@@ -133,7 +130,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "member-team", leadSessionID: "ses_lead" })
@@ -176,7 +173,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "safe-team", leadSessionID: "ses_lead_safe" })
@@ -201,7 +198,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const unsub = Team.onCleanedRestorePermissions()
@@ -215,8 +212,7 @@ describe("Team", () => {
           ],
         })
 
-        const tool = await TeamCreateTool.init()
-        const created = await tool.execute({ name: "delegate-team", delegate: true }, {
+        const created = await callTeamTool(TeamCreateTool, { name: "delegate-team", delegate: true }, {
           sessionID: session.id,
           messageID: "msg_1",
           agent: "general",
@@ -249,7 +245,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "notepad-team", leadSessionID: "ses_lead_notepad" })
@@ -268,7 +264,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "status-team", leadSessionID: "ses_lead" })
@@ -296,7 +292,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "active-team", leadSessionID: "ses_lead" })
@@ -320,7 +316,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "active-loop-team", leadSessionID: "ses_lead_loop" })
@@ -347,7 +343,7 @@ describe("Team", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "find-team", leadSessionID: "ses_lead_find" })
@@ -382,7 +378,7 @@ describe("TeamTasks", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "task-team", leadSessionID: "ses_lead" })
@@ -406,7 +402,7 @@ describe("TeamTasks", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "claim-team", leadSessionID: "ses_lead" })
@@ -432,7 +428,7 @@ describe("TeamTasks", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "dep-team", leadSessionID: "ses_lead" })
@@ -466,7 +462,7 @@ describe("TeamTasks", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "self-dep-team", leadSessionID: "ses_lead" })
@@ -493,7 +489,7 @@ describe("TeamTasks", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "unblock-team", leadSessionID: "ses_lead" })
@@ -525,7 +521,7 @@ describe("TeamTasks", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "update-team", leadSessionID: "ses_lead" })
@@ -551,7 +547,7 @@ describe("Team auto-cleanup", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const events: Array<{ teamName: string; grace: number; cleanupAt: number }> = []
@@ -559,8 +555,6 @@ describe("Team auto-cleanup", () => {
         const off = Bus.subscribe(TeamEvent.AllMembersShutdown, (event) => {
           events.push(event.properties)
         })
-        const status = await TeamStatusTool.init()
-        const notepad = await TeamNotepadTool.init()
         const ctx = {
           sessionID: "ses_lead_ac",
           messageID: "msg_ac",
@@ -599,10 +593,10 @@ describe("Team auto-cleanup", () => {
         })
         expect(events[0]!.cleanupAt).toBeGreaterThanOrEqual(Date.now() - 1000)
 
-        const snap = await status.execute({}, ctx)
+        const snap = await callTeamTool(TeamStatusTool, {}, ctx)
         expect(snap.title).toBe("Team status: auto-clean-team")
 
-        const note = await notepad.execute({ action: "read", key: "summary" }, ctx)
+        const note = await callTeamTool(TeamNotepadTool, { action: "read", key: "summary" }, ctx)
         expect(note.output).toBe("results ready")
 
         await Bun.sleep(60)
@@ -620,7 +614,7 @@ describe("Team auto-cleanup", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const stop = Team.autoCleanup({ grace: 100 })
@@ -663,7 +657,7 @@ describe("Team auto-cleanup", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const stop = Team.autoCleanup({ grace: 40 })
@@ -704,7 +698,7 @@ describe("Team auto-cleanup", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const stop = Team.autoCleanup({ grace: 40 })
@@ -739,7 +733,7 @@ describe("Team auto-cleanup", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const stop = Team.autoCleanup({ grace: 40 })
@@ -773,7 +767,7 @@ describe("Team messaging auto-wake", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const lead = await Session.create({})
@@ -834,7 +828,7 @@ describe("Team constraints", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "lead-team-1", leadSessionID: "ses_lead_single" })
@@ -853,7 +847,7 @@ describe("Team constraints", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "parent-team", leadSessionID: "ses_lead_parent" })
@@ -879,7 +873,7 @@ describe("Team constraints", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const team1 = await Team.create({ name: "team-a", leadSessionID: "ses_lead_a" })
@@ -900,7 +894,7 @@ describe("Team steering", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const send = spyOn(TeamMessaging, "send").mockImplementation(async () => {})
@@ -985,7 +979,7 @@ describe("Team steering", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const lead = await Session.create({})
@@ -1051,7 +1045,7 @@ describe("Team steering", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const lead = await Session.create({})
@@ -1110,7 +1104,7 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const tools = [
@@ -1129,8 +1123,9 @@ describe("Team tool definitions", () => {
           TeamCleanupTool,
         ]
 
+        const { initTeamTool } = await import("./_tool-runtime")
         for (const tool of tools) {
-          const initialized = await tool.init()
+          const initialized = await initTeamTool(tool)
           expect(initialized.description).toBeTruthy()
           expect(initialized.parameters).toBeDefined()
           expect(typeof initialized.execute).toBe("function")
@@ -1155,7 +1150,7 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         // Set up a team with a member
@@ -1167,8 +1162,7 @@ describe("Team tool definitions", () => {
           status: "busy",
         })
 
-        const tool = await TeamCreateTool.init()
-        const result = await tool.execute({ name: "nested-attempt" }, {
+        const result = await callTeamTool(TeamCreateTool, { name: "nested-attempt" }, {
           sessionID: "ses_guarded_worker",
           messageID: "msg_1",
           agent: "general",
@@ -1191,13 +1185,12 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "existing-lead-team", leadSessionID: "ses_existing_lead" })
 
-        const tool = await TeamCreateTool.init()
-        const result = await tool.execute({ name: "second-team" }, {
+        const result = await callTeamTool(TeamCreateTool, { name: "second-team" }, {
           sessionID: "ses_existing_lead",
           messageID: "msg_1",
           agent: "general",
@@ -1219,14 +1212,14 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
 
-        const tool = await TeamCreateTool.init()
-        const result = await tool.execute(
+        const result = await callTeamTool(
+          TeamCreateTool,
           { name: "workflow-team", receipts: true, output_format: "single_synthesis" },
           {
             sessionID: lead.id,
@@ -1266,7 +1259,7 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "shutdown-guard-team", leadSessionID: "ses_shutdown_lead" })
@@ -1277,10 +1270,8 @@ describe("Team tool definitions", () => {
           status: "busy",
         })
 
-        const tool = await TeamShutdownTool.init()
-
         // Member tries to shutdown another member — should fail
-        const result = await tool.execute({ name: "worker-x" }, {
+        const result = await callTeamTool(TeamShutdownTool, { name: "worker-x" }, {
           sessionID: "ses_worker_x",
           messageID: "msg_1",
           agent: "general",
@@ -1303,7 +1294,7 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "shutdown-busy-team", leadSessionID: "ses_shutdown_busy_lead" })
@@ -1320,8 +1311,7 @@ describe("Team tool definitions", () => {
         const loop = spyOn(SessionPrompt, "loop").mockResolvedValue({} as any)
         const timer = spyOn(globalThis, "setTimeout").mockImplementation((() => 1) as any)
 
-        const tool = await TeamShutdownTool.init()
-        const result = await tool.execute({ name: "worker-y" }, {
+        const result = await callTeamTool(TeamShutdownTool, { name: "worker-y" }, {
           sessionID: "ses_shutdown_busy_lead",
           messageID: "msg_1",
           agent: "general",
@@ -1354,7 +1344,7 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "pause-stuck-team", leadSessionID: "ses_pause_lead" })
@@ -1366,7 +1356,7 @@ describe("Team tool definitions", () => {
           execution_status: "running",
         })
 
-        const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue()
+        const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue(undefined)
         const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "busy" } as any)
 
         await expect(Team.pause({ teamName: "pause-stuck-team", memberName: "worker" })).rejects.toThrow(
@@ -1386,7 +1376,7 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "force-stuck-team", leadSessionID: "ses_force_lead" })
@@ -1398,7 +1388,7 @@ describe("Team tool definitions", () => {
           execution_status: "running",
         })
 
-        const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue()
+        const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue(undefined)
         const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "busy" } as any)
 
         const result = await Team.forceShutdownAll("force-stuck-team", "emergency")
@@ -1418,7 +1408,7 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "shutdown-timeout-team", leadSessionID: "ses_shutdown_timeout_lead" })
@@ -1433,14 +1423,13 @@ describe("Team tool definitions", () => {
         const send = spyOn(TeamMessaging, "send").mockImplementation(async () => {})
         const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "idle" } as any)
         const loop = spyOn(SessionPrompt, "loop").mockImplementation(((_input: any) => new Promise(() => {})) as any)
-        const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue()
+        const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue(undefined)
         const timer = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => Promise<void>) => {
           wait.push(fn)
           return 1 as any
         }) as any)
 
-        const tool = await TeamShutdownTool.init()
-        await tool.execute({ name: "worker-z" }, {
+        await callTeamTool(TeamShutdownTool, { name: "worker-z" }, {
           sessionID: "ses_shutdown_timeout_lead",
           messageID: "msg_1",
           agent: "general",
@@ -1472,11 +1461,10 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
-        const tool = await TeamClaimTool.init()
-        const result = await tool.execute({ task_id: "t1" }, {
+        const result = await callTeamTool(TeamClaimTool, { task_id: "t1" }, {
           sessionID: "ses_orphan",
           messageID: "msg_1",
           agent: "general",
@@ -1496,7 +1484,7 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "tasks-tool-team", leadSessionID: "ses_tasks_lead" })
@@ -1505,8 +1493,7 @@ describe("Team tool definitions", () => {
           { id: "t2", content: "Second task", status: "pending", priority: "medium" },
         ])
 
-        const tool = await TeamTasksTool.init()
-        const result = await tool.execute({ action: "list" }, {
+        const result = await callTeamTool(TeamTasksTool, { action: "list" }, {
           sessionID: "ses_tasks_lead",
           messageID: "msg_1",
           agent: "general",
@@ -1542,7 +1529,7 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "named-agent-team", leadSessionID: "ses_named_lead" })
@@ -1552,11 +1539,13 @@ describe("Team tool definitions", () => {
           label: "test/model",
         })
 
-        const tool = await TeamSpawnTool.init()
+        const { initTeamTool } = await import("./_tool-runtime")
+        const tool = await initTeamTool(TeamSpawnTool)
         expect(tool.description).toContain("Security Researcher Hunter")
         expect(tool.description).toContain("stay focused on orchestration")
 
-        const result = await tool.execute(
+        const result = await callTeamTool(
+          TeamSpawnTool,
           {
             name: "worker",
             agent: "Security Researcher Hunter",
@@ -1610,7 +1599,7 @@ describe("Team tool definitions", () => {
     await Instance.provide({
       directory: projectRoot,
       init: async () => {
-        Env.set("ANTHROPIC_API_KEY", "test-key")
+        process.env.ANTHROPIC_API_KEY = "test-key"
       },
       fn: async () => {
         await Team.create({ name: "status-tool-team", leadSessionID: "ses_status_lead" })
@@ -1627,8 +1616,7 @@ describe("Team tool definitions", () => {
           draft.members[0].started = Date.now() - 30 * 1000
         })
 
-        const tool = await TeamStatusTool.init()
-        const result = await tool.execute({}, {
+        const result = await callTeamTool(TeamStatusTool, {}, {
           sessionID: "ses_status_lead",
           messageID: "msg_1",
           agent: "general",
@@ -1638,7 +1626,9 @@ describe("Team tool definitions", () => {
           ask: async () => {},
         } as any)
 
-        const line = result.output.split("\n").find((item) => item.includes("worker") && item.includes("agent=general"))
+        const line = (result.output as string)
+          .split("\n")
+          .find((item: string) => item.includes("worker") && item.includes("agent=general"))
 
         expect(line).toBeDefined()
         expect(line).toMatch(/\| [01]m$/)
