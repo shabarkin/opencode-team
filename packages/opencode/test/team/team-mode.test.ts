@@ -1,12 +1,10 @@
 import { describe, expect, spyOn, test } from "bun:test"
-import { Env } from "../../src/env"
 import { Instance } from "../../src/project/instance"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Permission } from "../../src/permission"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
-import { Session } from "../../src/session"
-import { SessionPrompt } from "../../src/session/prompt"
+import { Session, SessionPrompt } from "../../src/team/runtime"
 import { DELEGATE_PATTERN, Team, WRITE_TOOLS, addDelegateRules } from "../../src/team"
 import { TeamMessaging } from "../../src/team/messaging"
 import { tmpdir } from "../fixture/fixture"
@@ -49,7 +47,9 @@ describe("team mode", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({ permission: addDelegateRules([]) })
         await seed(lead.id)
@@ -82,7 +82,9 @@ describe("team mode", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
@@ -128,7 +130,9 @@ describe("team mode", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
