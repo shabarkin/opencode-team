@@ -3,8 +3,7 @@ import path from "path"
 import fs from "fs/promises"
 import { Instance } from "../../src/project/instance"
 import { Team, TeamTasks } from "../../src/team"
-import { Env } from "../../src/env"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 
 Log.init({ print: false })
 
@@ -22,7 +21,9 @@ describe("Team persistence across restarts", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           await Team.create({
             name: "persist-test",
@@ -64,7 +65,9 @@ describe("Team persistence across restarts", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           await Team.create({ name: "alpha", leadSessionID: "ses_alpha_p" })
           await Team.create({ name: "beta", leadSessionID: "ses_beta_p" })
@@ -90,7 +93,9 @@ describe("Team persistence across restarts", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           await Team.create({ name: "find-test", leadSessionID: "ses_lead_find_p" })
           await Team.addMember("find-test", {
@@ -134,7 +139,9 @@ describe("Team persistence across restarts", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           await Team.create({ name: "tasks-test", leadSessionID: "ses_tasks_p" })
           await TeamTasks.add("tasks-test", [
@@ -170,7 +177,9 @@ describe("Team persistence across restarts", () => {
     try {
       await Instance.provide({
         directory: dir,
-        init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+        init: async () => {
+          process.env.ANTHROPIC_API_KEY = "test-key"
+        },
         fn: async () => {
           await Team.create({ name: "status-test", leadSessionID: "ses_st_p" })
           await Team.addMember("status-test", {
