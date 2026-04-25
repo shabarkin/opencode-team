@@ -1,3 +1,12 @@
+// TODO(team-merge-v1.14.24): The team feature originally rendered an inline
+// team panel here (member list with status icons, "back to lead" link,
+// shared task progress) by reading `sync.data.team[sessionID]` and
+// `sync.data.todo[sessionID]`. Upstream rewrote this sidebar to a thin
+// wrapper around TuiPluginRuntime.Slot, so the inline panel no longer fits.
+// The same information is available via the team dialog (Ctrl-T → DialogTeam),
+// so the sidebar block was dropped. If we ever want it back, surface it
+// either as a TuiPluginRuntime plugin or by porting the team data plumbing
+// into the sidebar's data model.
 import { useProject } from "@tui/context/project"
 import { useSync } from "@tui/context/sync"
 import { createMemo, Show } from "solid-js"
