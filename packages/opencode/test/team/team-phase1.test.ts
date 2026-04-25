@@ -1,10 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import { Instance } from "../../src/project/instance"
-import { Env } from "../../src/env"
-import { Log } from "../../src/util/log"
-import { Session } from "../../src/session"
-import { SessionPrompt } from "../../src/session/prompt"
-import { SessionStatus } from "../../src/session/status"
+import { Log } from "../../src/util"
+import { Session, SessionPrompt, SessionStatus, Plugin } from "../../src/team/runtime"
 import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { ProviderID, ModelID } from "../../src/provider/schema"
 import { Team } from "../../src/team"
@@ -13,8 +10,8 @@ import { TeamRequestSpawnTool, TeamShutdownTool, TeamSpawnTool } from "../../src
 import { Inbox } from "../../src/team/inbox"
 import { MessageV2 } from "../../src/session/message-v2"
 import { Bus } from "../../src/bus"
-import { Plugin } from "../../src/plugin"
 import { tmpdir } from "../fixture/fixture"
+import { callTeamTool } from "./_tool-runtime"
 
 Log.init({ print: false })
 
@@ -57,7 +54,9 @@ describe("team phase 1", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
@@ -109,7 +108,9 @@ describe("team phase 1", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const stop = Team.checkpoints()
         const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
@@ -130,6 +131,8 @@ describe("team phase 1", () => {
         })
 
         await Bus.publish(MessageV2.Event.PartUpdated, {
+          sessionID: SessionID.make(member.id),
+          time: Date.now(),
           part: {
             id: PartID.ascending(),
             messageID: MessageID.ascending(),
@@ -171,7 +174,9 @@ describe("team phase 1", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const lead = await Session.create({})
@@ -189,8 +194,8 @@ describe("team phase 1", () => {
           planApproval: "none",
         })
 
-        const requestTool = await TeamRequestSpawnTool.init()
-        const requested = await requestTool.execute(
+        const requested = await callTeamTool(
+          TeamRequestSpawnTool,
           {
             agent: "explore",
             name: "scout",
@@ -203,8 +208,8 @@ describe("team phase 1", () => {
         expect(requestID).toBeTruthy()
         expect((await Team.listSpawnRequests("phase1-request")).map((item) => item.id)).toContain(requestID)
 
-        const spawnTool = await TeamSpawnTool.init()
-        const approved = await spawnTool.execute(
+        const approved = await callTeamTool(
+          TeamSpawnTool,
           {
             from_request: requestID,
             checkpoint: "none",
@@ -230,7 +235,9 @@ describe("team phase 1", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
@@ -254,8 +261,8 @@ describe("team phase 1", () => {
           request: { id: "req_auto", name: "scout" },
         } as any)
 
-        const tool = await TeamRequestSpawnTool.init()
-        const result = await tool.execute(
+        const result = await callTeamTool(
+          TeamRequestSpawnTool,
           {
             agent: "explore",
             name: "scout",
@@ -283,7 +290,9 @@ describe("team phase 1", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
         const trigger = spyOn(Plugin, "trigger").mockImplementation(async (name, _input, output) => {
@@ -338,9 +347,7 @@ describe("team phase 1", () => {
           }),
         ).rejects.toThrow("Spawn denied by test policy")
 
-        const shutdown = await (
-          await TeamShutdownTool.init()
-        ).execute({ name: "worker" }, ctx(lead.id, await Session.messages({ sessionID: lead.id })))
+        const shutdown = await callTeamTool(TeamShutdownTool, { name: "worker" }, ctx(lead.id, await Session.messages({ sessionID: lead.id })))
         expect(shutdown.title).toBe("Shutdown blocked")
         expect(shutdown.output).toContain("Shutdown denied by test policy")
 
