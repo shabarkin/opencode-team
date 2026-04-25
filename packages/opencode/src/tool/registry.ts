@@ -28,6 +28,7 @@ import { Log } from "@/util"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
 import { ApplyPatchTool } from "./apply_patch"
+import { TeamTools } from "./team"
 import { Glob } from "@opencode-ai/shared/util/glob"
 import path from "path"
 import { pathToFileURL } from "url"
@@ -116,6 +117,10 @@ export const layer: Layer.Layer<
     const patchtool = yield* ApplyPatchTool
     const skilltool = yield* SkillTool
     const agent = yield* Agent.Service
+
+    const teamInfos = Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+      ? yield* Effect.all(TeamTools)
+      : []
 
     const state = yield* InstanceState.make<State>(
       Effect.fn("ToolRegistry.state")(function* (ctx) {
@@ -226,8 +231,11 @@ export const layer: Layer.Layer<
             tool.patch,
             ...(Flag.OPENCODE_EXPERIMENTAL_LSP_TOOL ? [tool.lsp] : []),
             ...(Flag.OPENCODE_EXPERIMENTAL_PLAN_MODE && Flag.OPENCODE_CLIENT === "cli" ? [tool.plan] : []),
-            // TODO(team-merge-v1.14.24): Re-add TeamTools after porting to Effect Schema (Phase D.1).
-            // ...(Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS ? teamTools : []),
+            // Team tool Infos have heterogeneous parameter and metadata types;
+            // erase to a common shape so a single Tool.init signature applies.
+            ...(yield* Effect.all(
+              teamInfos.map((info) => Tool.init(info as unknown as Tool.Info<Schema.Decoder<unknown>, Record<string, unknown>>)),
+            )),
           ],
           task: tool.task,
           read: tool.read,
