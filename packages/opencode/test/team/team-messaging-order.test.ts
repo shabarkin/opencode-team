@@ -1,7 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import { Env } from "../../src/env"
 import { Instance } from "../../src/project/instance"
-import { Session } from "../../src/session"
+import { Session } from "../../src/team/runtime"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Team } from "../../src/team"
 import { Inbox } from "../../src/team/inbox"
@@ -36,7 +35,9 @@ describe("team messaging order", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
