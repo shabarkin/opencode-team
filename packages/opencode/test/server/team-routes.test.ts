@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, spyOn, test } from "bun:test"
-import { generateSpecs } from "hono-openapi"
 import { Server } from "../../src/server/server"
 import { Instance } from "../../src/project/instance"
-import { Session } from "../../src/session"
+import { Session } from "../../src/team/runtime"
 import { Team } from "../../src/team"
-import { TeamRoutes } from "../../src/server/routes/team"
-import { Log } from "../../src/util/log"
+import { TeamRoutes } from "../../src/server/routes/instance/team"
+import { Log } from "../../src/util"
 import type { SessionID } from "../../src/session/schema"
 import { resetDatabase } from "../fixture/db"
 import { tmpdir } from "../fixture/fixture"
@@ -25,16 +24,7 @@ describe("team routes", () => {
   test("are omitted from openapi when feature flag is off", async () => {
     delete process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
 
-    const spec = await generateSpecs(Server.createApp({}), {
-      documentation: {
-        info: {
-          title: "opencode",
-          version: "1.0.0",
-          description: "opencode api",
-        },
-        openapi: "3.1.1",
-      },
-    })
+    const spec = await Server.openapi()
 
     expect(Object.keys(spec.paths ?? {}).some((path) => path.startsWith("/team"))).toBe(false)
   })
