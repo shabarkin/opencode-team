@@ -8,7 +8,13 @@ import { useRoute } from "../context/route"
 import { useToast } from "../ui/toast"
 import { useSDK } from "../context/sdk"
 import { teamStatusIcon } from "@/team/status-view"
-import { loadTeamSession } from "@/team/session-payload"
+import { loadTeamSession, type TeamSessionState } from "@/team/session-payload"
+
+// TODO(team): The TUI sync store doesn't yet declare a `team` slot upstream
+// (it lived on the team feature branch's sync.tsx). Until that re-graft
+// lands we cast through `any` to keep this dialog compiling. The data
+// shape is stable — see TeamSessionState below.
+type TeamSyncSlot = Record<string, TeamSessionState | undefined>
 
 type Value = { type: "member"; sessionID?: string } | { type: "task"; id: string } | { type: "request"; id: string }
 
@@ -48,22 +54,23 @@ export function DialogTeam() {
   const toast = useToast()
   const sdk = useSDK()
 
-  const teamInfo = createMemo(() => sync.data.team[route.sessionID])
+  const teamInfo = createMemo(() => ((sync.data as unknown as { team: TeamSyncSlot }).team ?? {})[route.sessionID])
 
   // Refresh team data on open
   onMount(() => {
     dialog.setSize("large")
     void loadTeamSession({ url: sdk.url, fetch: sdk.fetch, sessionID: route.sessionID }).then((data) => {
       if (data === undefined) return
+      const setTeam = (sync.set as unknown as (key: "team", ...args: unknown[]) => void)
       if (data === null) {
-        sync.set("team", (teams) => {
+        setTeam("team", (teams: TeamSyncSlot) => {
           const next = { ...teams }
           delete next[route.sessionID]
           return next
         })
         return
       }
-      sync.set("team", route.sessionID, data)
+      setTeam("team", route.sessionID, data)
     })
   })
 

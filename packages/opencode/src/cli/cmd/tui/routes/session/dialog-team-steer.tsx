@@ -5,15 +5,22 @@ import { DialogPrompt } from "../../ui/dialog-prompt"
 import { useSync } from "../../context/sync"
 import { useSDK } from "../../context/sdk"
 import { useToast } from "../../ui/toast"
+import type { TeamSessionState } from "@/team/session-payload"
 
 type Action = "message" | "pause" | "resume" | "cancel" | "steer-all"
+
+// TODO(team): The TUI sync store doesn't yet declare a `team` slot upstream.
+// Cast through unknown until that re-graft lands.
+type TeamSyncSlot = Record<string, TeamSessionState | undefined>
 
 export function DialogTeamSteer(props: { sessionID: string }) {
   const dialog = useDialog()
   const sync = useSync()
   const sdk = useSDK()
   const toast = useToast()
-  const team = createMemo(() => sync.data.team[props.sessionID])
+  const team = createMemo(
+    () => ((sync.data as unknown as { team: TeamSyncSlot }).team ?? {})[props.sessionID],
+  )
 
   const options = createMemo((): DialogSelectOption<{ action: Action; member?: string }>[] => {
     const info = team()
