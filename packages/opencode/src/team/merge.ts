@@ -1,6 +1,6 @@
 import fs from "fs/promises"
 import { Instance } from "@/project/instance"
-import { Storage } from "@/storage/storage"
+import { Storage } from "./runtime"
 import { Log } from "@/util"
 import type { TeamInfo, TeamMember } from "./events"
 
