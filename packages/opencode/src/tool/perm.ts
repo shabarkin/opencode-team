@@ -1,6 +1,6 @@
 import path from "path"
 import { Instance } from "@/project/instance"
-import { Filesystem } from "@/util/filesystem"
+import * as Filesystem from "@/util/filesystem"
 
 function norm(input: string) {
   return input.replaceAll("\\", "/")
