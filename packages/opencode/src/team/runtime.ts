@@ -196,6 +196,8 @@ export const SessionPrompt = {
   cancel: (sessionID: SessionID) => sessionPromptRt.runPromise((s) => s.cancel(sessionID)),
   loop: (input: SessionPromptNs.LoopInput | { sessionID: SessionID }) =>
     sessionPromptRt.runPromise((s) => s.loop(input as SessionPromptNs.LoopInput)),
+  prompt: (input: SessionPromptNs.PromptInput) =>
+    sessionPromptRt.runPromise((s) => s.prompt(input)),
   inject: (input: {
     sessionID: SessionID
     text: string

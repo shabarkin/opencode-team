@@ -1,12 +1,10 @@
 import { describe, expect, spyOn, test } from "bun:test"
-import { Env } from "../../src/env"
 import { Inbox } from "../../src/team/inbox"
 import { Instance } from "../../src/project/instance"
-import { Log } from "../../src/util/log"
+import { Log } from "../../src/util"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
-import { Session } from "../../src/session"
-import { SessionPrompt } from "../../src/session/prompt"
+import { Session, SessionPrompt } from "../../src/team/runtime"
 import { Team } from "../../src/team"
 import { TeamMessaging } from "../../src/team/messaging"
 import { TeamCreateTool } from "../../src/tool/team"
@@ -15,6 +13,7 @@ import { TeamSpawnTool } from "../../src/tool/team"
 import { TeamStatusTool } from "../../src/tool/team-status"
 import { TeamDelegateTool } from "../../src/tool/team-delegate"
 import { tmpdir } from "../fixture/fixture"
+import { callTeamTool } from "./_tool-runtime"
 
 Log.init({ print: false })
 
@@ -108,7 +107,9 @@ describe("team phase 2", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
@@ -134,8 +135,8 @@ describe("team phase 2", () => {
           return (await wait) as any
         }) as any)
 
-        const tool = await TeamDelegateTool.init()
-        const run = tool.execute(
+        const run = callTeamTool(
+          TeamDelegateTool,
           {
             description: "schema check",
             prompt: "Validate the API schema",
@@ -150,7 +151,7 @@ describe("team phase 2", () => {
         const team = await Team.get("phase2-delegate")
         expect(team?.members.find((item) => item.name === "worker")?.activeDelegations).toBe(1)
 
-        const status = await (await TeamStatusTool.init()).execute({}, ctx(lead.id))
+        const status = await callTeamTool(TeamStatusTool, {}, ctx(lead.id))
         expect(status.output).toContain("delegations=1")
 
         done({ parts: [{ type: "text", text: "Delegate finished cleanly" }] })
@@ -179,7 +180,9 @@ describe("team phase 2", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const member = await Session.create({ parentID: lead.id })
@@ -230,9 +233,7 @@ describe("team phase 2", () => {
         const root = sent.find((item) => item.text === "Background note")
         expect(root?.threadId).toBeTruthy()
 
-        const reply = await (
-          await TeamReplyTool.init()
-        ).execute(
+        const reply = await callTeamTool(TeamReplyTool, 
           {
             text: "Handled",
             type: "result",
@@ -260,7 +261,7 @@ describe("team phase 2", () => {
           true,
         )
 
-        const status = await (await TeamStatusTool.init()).execute({}, ctx(lead.id))
+        const status = await callTeamTool(TeamStatusTool, {}, ctx(lead.id))
         expect(status.output).toContain("Threads")
         expect(status.output).toContain("Handled")
 
@@ -275,7 +276,9 @@ describe("team phase 2", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
@@ -286,8 +289,8 @@ describe("team phase 2", () => {
           label: "openai/gpt-4.1",
         })
 
-        const tool = await TeamSpawnTool.init()
-        const result = await tool.execute(
+        const result = await callTeamTool(
+          TeamSpawnTool,
           {
             name: "worker",
             agent: "explore",
@@ -324,13 +327,15 @@ describe("team phase 2", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const worker = await Session.create({ parentID: lead.id })
         await seed(lead.id)
 
-        await (await TeamCreateTool.init()).execute({ name: "phase2-team-cap" }, ctx(lead.id))
+        await callTeamTool(TeamCreateTool, { name: "phase2-team-cap" }, ctx(lead.id))
 
         await Team.addMember("phase2-team-cap", {
           name: "worker",
@@ -378,14 +383,14 @@ describe("team phase 2", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         await seed(lead.id)
 
-        const create = await (
-          await TeamCreateTool.init()
-        ).execute(
+        const create = await callTeamTool(TeamCreateTool, 
           {
             name: "phase2-team-policy",
             collect_strict: true,
@@ -409,7 +414,9 @@ describe("team phase 2", () => {
     await using tmp = await tmpdir()
     await Instance.provide({
       directory: tmp.path,
-      init: async () => Env.set("ANTHROPIC_API_KEY", "test-key"),
+      init: async () => {
+        process.env.ANTHROPIC_API_KEY = "test-key"
+      },
       fn: async () => {
         const lead = await Session.create({})
         const worker = await Session.create({ parentID: lead.id })
@@ -445,7 +452,7 @@ describe("team phase 2", () => {
         const leadUnread = await Inbox.unread("phase2-budget", "lead")
         expect(leadUnread).toHaveLength(0)
 
-        const status = await (await TeamStatusTool.init()).execute({}, ctx(lead.id))
+        const status = await callTeamTool(TeamStatusTool, {}, ctx(lead.id))
         expect(status.output).toContain("Costs:")
         expect(status.output).toContain("projected 1h")
         expect(status.output).not.toContain("Budget")
