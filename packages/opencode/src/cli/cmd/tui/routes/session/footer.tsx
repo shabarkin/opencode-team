@@ -17,6 +17,11 @@ export function Footer() {
     if (route.data.type !== "session") return []
     return sync.data.permission[route.data.sessionID] ?? []
   })
+  const teamInfo = createMemo(() => {
+    const data = route.data
+    if (data.type !== "session") return undefined
+    return sync.data.team[data.sessionID]
+  })
   const directory = useDirectory()
   const connected = useConnected()
 
@@ -83,6 +88,14 @@ export function Footer() {
               </text>
             </Show>
             <text fg={theme.textMuted}>/status</text>
+            <Show when={teamInfo()}>
+              {(info) => (
+                <text fg={theme.textMuted} wrapMode="none" flexShrink={0}>
+                  [{info().teamName} | {info().members.length}m |{" "}
+                  {info().members.filter((m) => m.status === "busy").length} busy]
+                </text>
+              )}
+            </Show>
           </Match>
         </Switch>
       </box>
