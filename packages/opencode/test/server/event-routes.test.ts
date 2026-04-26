@@ -1,12 +1,7 @@
 import { describe, expect, test } from "bun:test"
-// TODO(team): The `redact()` helper was originally exported from
-// `src/server/routes/event.ts` (a team-feature-only export). Upstream PR #19316
-// reorganized server/routes into instance/control/global, and the redact helper
-// hasn't been re-grafted onto the new `src/server/routes/instance/event.ts`. Once
-// it is re-added there, replace this stub with `import { redact } from "../../src/server/routes/instance/event"`.
-const redact = (event: { type: string; properties: Record<string, unknown> }) => event
+import { redact } from "../../src/server/routes/instance/event"
 
-describe.skip("event route redaction", () => {
+describe("event route redaction", () => {
   test("redacts sensitive team event fields", () => {
     const event = redact({
       type: "team.message",
