@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import path from "path"
 import * as fs from "fs/promises"
 import { Effect, ManagedRuntime, Layer } from "effect"
@@ -289,16 +289,71 @@ describe("tool.apply_patch freeform", () => {
     })
   })
 
-  // TODO(team): These tests previously spied on `File.edited` to verify
-  // delete/move provenance. After PR #23244 the apply_patch tool now publishes
-  // `File.Event.Edited` directly via its own Effect-based Bus.Service injection;
-  // the test's local Bus.subscribe runs in a different ManagedRuntime so it
-  // never sees the events. Re-enable once apply_patch.test.ts is rewritten to
-  // share the tool's Bus runtime, or once `File.edited` becomes a Promise facade
-  // again that can be spied on.
-  test.skip("publishes delete provenance for removed file", async () => {})
+  test("publishes delete provenance for removed file", async () => {
+    await using fixture = await tmpdir()
+    const { ctx } = makeCtx()
 
-  test.skip("publishes move provenance for source and destination", async () => {})
+    await Instance.provide({
+      directory: fixture.path,
+      fn: async () => {
+        const target = path.join(fixture.path, "remove.txt")
+        await fs.writeFile(target, "obsolete\n", "utf-8")
+        const events: Array<{ file: string; sessionID: string }> = []
+        const unsub = await runtime.runPromise(
+          Bus.Service.use((svc) =>
+            svc.subscribeCallback(File.Event.Edited, (event) => {
+              events.push(event.properties)
+            }),
+          ),
+        )
+
+        try {
+          await execute({ patchText: "*** Begin Patch\n*** Delete File: remove.txt\n*** End Patch" }, ctx)
+          await new Promise((r) => setTimeout(r, 30))
+          expect(events).toContainEqual({ file: target, sessionID: ctx.sessionID })
+        } finally {
+          unsub()
+        }
+      },
+    })
+  })
+
+  test("publishes move provenance for source and destination", async () => {
+    await using fixture = await tmpdir()
+    const { ctx } = makeCtx()
+
+    await Instance.provide({
+      directory: fixture.path,
+      fn: async () => {
+        const src = path.join(fixture.path, "old.txt")
+        const dst = path.join(fixture.path, "new.txt")
+        await fs.writeFile(src, "before\n", "utf-8")
+        const events: Array<{ file: string; sessionID: string }> = []
+        const unsub = await runtime.runPromise(
+          Bus.Service.use((svc) =>
+            svc.subscribeCallback(File.Event.Edited, (event) => {
+              events.push(event.properties)
+            }),
+          ),
+        )
+
+        try {
+          await execute(
+            {
+              patchText:
+                "*** Begin Patch\n*** Update File: old.txt\n*** Move to: new.txt\n@@\n-before\n+after\n*** End Patch",
+            },
+            ctx,
+          )
+          await new Promise((r) => setTimeout(r, 30))
+          expect(events).toContainEqual({ file: src, sessionID: ctx.sessionID })
+          expect(events).toContainEqual({ file: dst, sessionID: ctx.sessionID })
+        } finally {
+          unsub()
+        }
+      },
+    })
+  })
 
   test("moves file overwriting existing destination", async () => {
     await using fixture = await tmpdir()
