@@ -1,6 +1,7 @@
 import { Log } from "../util"
 import { Bus } from "../bus"
 import { File } from "../file"
+import { Instance } from "../project/instance"
 import { Team, TeamEvent } from "./index"
 import { TeamMessaging } from "./messaging"
 import { TeamPolicy } from "./policy"
@@ -23,7 +24,16 @@ interface FileEdit {
   timestamp: number
 }
 
-/** In-memory map: team:file → recent editors */
+/**
+ * In-memory map: project:team:file → recent editors.
+ *
+ * The project segment is critical: the server can host multiple Instances
+ * over its lifetime (each request binds an Instance via
+ * `server/routes/instance/middleware.ts`), and team names are scoped to a
+ * project, not the process. Without the project prefix two projects that
+ * happen to use the same team name would cross-contaminate file conflict
+ * tracking.
+ */
 const edits = new Map<string, FileEdit[]>()
 const warns = new Map<string, number>()
 const SEP = "\u0000"
@@ -38,13 +48,13 @@ function base(member?: { worktreePath?: string }) {
   return member?.worktreePath ?? SHARED
 }
 
-function key(teamName: string, dir: string, file: string): string {
-  return [teamName, dir, file].join(SEP)
+function key(projectID: string, teamName: string, dir: string, file: string): string {
+  return [projectID, teamName, dir, file].join(SEP)
 }
 
 function part(id: string) {
-  const [teamName, dir, file] = id.split(SEP)
-  return { teamName, dir, file }
+  const [projectID, teamName, dir, file] = id.split(SEP)
+  return { projectID, teamName, dir, file }
 }
 
 function recent(list: FileEdit[], now: number) {
@@ -84,7 +94,7 @@ export function initFileTracking(): () => void {
     const member = team.members.find((item) => item.name === editor)
     if (!member) return
 
-    const id = key(teamName, base(member), file)
+    const id = key(Instance.project.id, teamName, base(member), file)
     const prev = recent(edits.get(id) ?? [], now).filter((edit) => !skip.has(edit.memberName))
     const members = [...new Set(prev.map((edit) => edit.memberName).filter((name) => name !== editor))]
 
@@ -145,10 +155,11 @@ export function initFileTracking(): () => void {
  */
 export function recentEdits(teamName: string): Array<{ file: string; memberName: string; timestamp: number }> {
   const now = Date.now()
+  const projectID = Instance.project.id
   const result: Array<{ file: string; memberName: string; timestamp: number }> = []
   for (const [id, list] of edits) {
     const item = part(id)
-    if (item.teamName !== teamName) continue
+    if (item.projectID !== projectID || item.teamName !== teamName) continue
     const next = recent(list, now)
     if (next.length === 0) {
       edits.delete(id)
@@ -171,12 +182,13 @@ export function activeConflicts(
   team?: { members: Array<{ name: string; status: string }> },
 ): Array<{ file: string; members: string[] }> {
   const now = Date.now()
+  const projectID = Instance.project.id
   const result: Array<{ file: string; members: string[] }> = []
   const skip = shutdowns(team)
 
   for (const [id, list] of edits) {
     const item = part(id)
-    if (item.teamName !== teamName) continue
+    if (item.projectID !== projectID || item.teamName !== teamName) continue
     const next = recent(list, now)
     if (next.length === 0) {
       edits.delete(id)
@@ -195,8 +207,10 @@ export function activeConflicts(
 }
 
 export function removeEdits(teamName: string) {
+  const projectID = Instance.project.id
   for (const id of edits.keys()) {
-    if (part(id).teamName !== teamName) continue
+    const p = part(id)
+    if (p.projectID !== projectID || p.teamName !== teamName) continue
     edits.delete(id)
     warns.delete(id)
   }

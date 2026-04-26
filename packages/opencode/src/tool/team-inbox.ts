@@ -5,7 +5,7 @@ import { Inbox } from "../team/inbox"
 import { TeamMessaging } from "../team/messaging"
 import { Team, TeamEvent, TeamTasks } from "../team"
 import { SubmittedResultSchema } from "../team/events"
-import { Bounded, SafeName } from "./team-schema"
+import { Bounded, MaxLen, SafeName } from "./team-schema"
 
 const RESULT_STATUS_VALUES = ["success", "partial", "blocked", "failed"] as const
 const EVIDENCE_TIER_VALUES = ["publicly_evidenced", "strong_analogue", "hypothesis"] as const
@@ -174,13 +174,13 @@ export const TeamInboxTool = Tool.define<typeof InboxParameters, InboxMetadata, 
 )
 
 export const SubmitResultParameters = Schema.Struct({
-  title: Schema.String,
-  summary: Schema.String,
+  title: MaxLen(120),
+  summary: MaxLen(2000),
   status: Schema.Literals(RESULT_STATUS_VALUES),
   files_changed: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
   evidence_tier: Schema.optional(Schema.Literals(EVIDENCE_TIER_VALUES)),
   evidence: Schema.optional(Schema.String),
-  confidence: Schema.optional(Schema.Number),
+  confidence: Schema.optional(Bounded(0, 1)),
   blockers: Schema.optional(Schema.String),
   task_id: Schema.optional(Schema.String),
 })
@@ -191,7 +191,7 @@ type SubmitResultMetadata = {
   taskId?: string
 }
 
-function resultText(input: Schema.Schema.Type<typeof SubmitResultParameters>) {
+function resultText(input: ReturnType<typeof SubmittedResultSchema.parse>) {
   return [
     `Result: ${input.title}`,
     `Status: ${input.status}`,
@@ -249,7 +249,7 @@ export const TeamSubmitResultTool = Tool.define<typeof SubmitResultParameters, S
               teamName: info.team.name,
               from: info.memberName!,
               to: "lead",
-              text: resultText(params),
+              text: resultText(result),
               type: "result",
               metadata: { result },
             }),

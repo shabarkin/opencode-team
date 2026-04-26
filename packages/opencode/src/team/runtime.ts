@@ -58,50 +58,6 @@ export const Storage = {
 
 const sessionRt = lazy(() => makeRuntime(SessionNs.Service, SessionNs.defaultLayer))
 
-/**
- * Creates a session with an explicit directory (used by team worktree spawn).
- *
- * Equivalent to upstream's internal `createNext` helper: bypasses the public
- * `Session.create` (which forces directory from `InstanceState.directory`) and
- * goes direct to the lower-level fields. We re-implement the small piece of
- * `createNext` that team needs by composing public APIs.
- */
-function createNextEffect(input: {
-  parentID?: SessionID
-  directory: string
-  title?: string
-  permission?: any
-}) {
-  // Use Session.create then patch the directory via the InstanceState override.
-  // Since Session.create is the only public API and it pulls directory from
-  // InstanceState, we use Effect.provideService to override the directory.
-  // But InstanceState.directory isn't a simple service we can override easily,
-  // so we fall back to calling create + then overriding the directory in the
-  // emitted info via patch. Concretely: create with current directory, then
-  // overwrite via a touch-style patch. This matches the original behaviour
-  // closely enough for the team spawn case.
-  return Effect.gen(function* () {
-    const sessions = yield* SessionNs.Service
-    const info = yield* sessions.create({
-      parentID: input.parentID,
-      title: input.title,
-      permission: input.permission,
-    })
-    if (info.directory !== input.directory) {
-      // Patch the directory to match the requested worktree path.
-      // We re-emit a Session.Updated by writing the same info with a new directory.
-      // This goes through SyncEvent so subscribers see the change.
-      // Use the public update path via setRevert? No — there is no public
-      // patcher for `directory`. We mutate the returned object so callers see
-      // the new path; the persisted record will correct itself on next write.
-      // TODO(team): Add a Session.setDirectory effect upstream so we can avoid
-      // this mutation.
-      ;(info as { directory: string }).directory = input.directory
-    }
-    return info
-  })
-}
-
 export const Session = {
   get: (id: SessionID) => sessionRt().runPromise((s) => s.get(id)),
   setPermission: (input: { sessionID: SessionID; permission: any }) =>
@@ -113,8 +69,13 @@ export const Session = {
   updatePart: <T extends MessageV2Ns.Part>(part: T) => sessionRt().runPromise((s) => s.updatePart(part)),
   create: (input?: { parentID?: SessionID; title?: string; permission?: any }) =>
     sessionRt().runPromise((s) => s.create(input)),
+  /**
+   * Creates a session pinned to an explicit working directory (used by team
+   * worktree spawn so external clients pick the worktree path back up via
+   * `session.directory`).
+   */
   createNext: (input: { parentID?: SessionID; directory: string; title?: string; permission?: any }) =>
-    sessionRt().runPromise(() => createNextEffect(input)),
+    sessionRt().runPromise((s) => s.createNext(input)),
   // Sync generator — re-export as-is; uses Database.use which doesn't need a runtime.
   list: SessionNs.list,
 }

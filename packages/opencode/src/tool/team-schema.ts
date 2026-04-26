@@ -13,3 +13,5 @@ export const Bounded = (min: number, max: number) =>
 
 export const AtLeast = (min: number) =>
   Schema.Number.check(Schema.isGreaterThanOrEqualTo(min))
+
+export const MaxLen = (max: number) => Schema.String.check(Schema.isMaxLength(max))

@@ -374,6 +374,21 @@ export interface Interface {
     permission?: Permission.Ruleset
     workspaceID?: WorkspaceID
   }) => Effect.Effect<Info>
+  /**
+   * Lower-level create that lets callers pin the session's working directory
+   * explicitly (instead of inheriting `InstanceState.directory`). Used by the
+   * team feature to spawn teammates inside per-member git worktrees so that
+   * external clients (TUI/ACP) read `session.directory` and reuse the
+   * worktree path for subsequent requests.
+   */
+  readonly createNext: (input: {
+    id?: SessionID
+    parentID?: SessionID
+    title?: string
+    permission?: Permission.Ruleset
+    workspaceID?: WorkspaceID
+    directory: string
+  }) => Effect.Effect<Info>
   readonly fork: (input: { sessionID: SessionID; messageID?: MessageID }) => Effect.Effect<Info>
   readonly touch: (sessionID: SessionID) => Effect.Effect<void>
   readonly get: (id: SessionID) => Effect.Effect<Info>
@@ -710,6 +725,7 @@ export const layer: Layer.Layer<Service, never, Bus.Service | Storage.Service> =
 
     return Service.of({
       create,
+      createNext,
       fork,
       touch,
       get,

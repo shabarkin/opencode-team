@@ -21,7 +21,7 @@ import { TeamPhaseTool, TeamShutdownAllTool } from "./team-lifecycle"
 import { SessionID } from "../session/schema"
 import { Inbox } from "../team/inbox"
 import { activeConflicts } from "../team/files"
-import { AtLeast, SafeName } from "./team-schema"
+import { Bounded, SafeName } from "./team-schema"
 
 const MESSAGE_TYPE_VALUES = [
   "message",
@@ -275,8 +275,9 @@ export const TeamSpawnParameters = Schema.Struct({
   reject_reason: Schema.optional(Schema.String).annotate({
     description: "If set with from_request, rejects that spawn request with this reason",
   }),
-  timeout: Schema.optional(Schema.Number).annotate({
-    description: "Maximum execution time in minutes. Teammate is auto-cancelled when exceeded. Default: no limit.",
+  timeout: Schema.optional(Bounded(1, 1440)).annotate({
+    description:
+      "Maximum execution time in minutes (1..1440). Teammate is auto-cancelled when exceeded. Default: no limit.",
   }),
   require_plan_approval: Schema.optional(Schema.Boolean).annotate({
     description:
@@ -289,9 +290,9 @@ export const TeamSpawnParameters = Schema.Struct({
     description:
       "'research' = read-only (no write/edit/bash). 'implementation' = full access. Default: 'mixed'.",
   }),
-  result_deadline: Schema.optional(AtLeast(1)).annotate({
+  result_deadline: Schema.optional(Bounded(1, 1440)).annotate({
     description:
-      "Optional result deadline in minutes. The teammate and lead are warned if no result arrives in time.",
+      "Optional result deadline in minutes (1..1440). The teammate and lead are warned if no result arrives in time.",
   }),
   checkpoint: Schema.optional(Schema.Literals(CHECKPOINT_MODE_VALUES)).annotate({
     description:
