@@ -209,7 +209,7 @@ export const TeamCollectTool = Tool.define<typeof Parameters, Metadata, never>(
               }
             }
 
-            yield* Effect.sleep(`${poll} millis`)
+            yield* Effect.promise(() => Bun.sleep(poll))
           }
         }).pipe(Effect.orDie),
     } satisfies Tool.DefWithoutID<typeof Parameters, Metadata>
