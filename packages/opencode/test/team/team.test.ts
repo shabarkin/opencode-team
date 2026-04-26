@@ -1545,8 +1545,12 @@ describe("Team tool definitions", () => {
 
         const { initTeamTool } = await import("./_tool-runtime")
         const tool = await initTeamTool(TeamSpawnTool)
-        expect(tool.description).toContain("Security Researcher Hunter")
+        // Note: dynamic agent enumeration was removed from the description
+        // string when Tool.define moved to layer-time init (process-global,
+        // before any Instance). Available-agents are now surfaced in the
+        // unknown-agent error path instead. See tool/team.ts.
         expect(tool.description).toContain("stay focused on orchestration")
+        expect(tool.description).toContain("the tool errors with the available names")
 
         const result = await callTeamTool(
           TeamSpawnTool,
