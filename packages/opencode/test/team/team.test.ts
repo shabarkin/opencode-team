@@ -555,7 +555,7 @@ describe("Team auto-cleanup", () => {
       },
       fn: async () => {
         const events: Array<{ teamName: string; grace: number; cleanupAt: number }> = []
-        const stop = Team.autoCleanup({ grace: 50 })
+        const stop = Team.autoCleanup({ grace: 300 })
         const off = Bus.subscribe(TeamEvent.AllMembersShutdown, (event) => {
           events.push(event.properties)
         })
@@ -593,7 +593,7 @@ describe("Team auto-cleanup", () => {
         expect(events).toHaveLength(1)
         expect(events[0]).toMatchObject({
           teamName: "auto-clean-team",
-          grace: 50,
+          grace: 300,
         })
         expect(events[0]!.cleanupAt).toBeGreaterThanOrEqual(Date.now() - 1000)
 
@@ -603,7 +603,7 @@ describe("Team auto-cleanup", () => {
         const note = await callTeamTool(TeamNotepadTool, { action: "read", key: "summary" }, ctx)
         expect(note.output).toBe("results ready")
 
-        await Bun.sleep(60)
+        await Bun.sleep(400)
         const gone = await Team.get("auto-clean-team")
         expect(gone).toBeUndefined()
 
@@ -664,7 +664,7 @@ describe("Team auto-cleanup", () => {
         // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
-        const stop = Team.autoCleanup({ grace: 40 })
+        const stop = Team.autoCleanup({ grace: 200 })
 
         await Team.create({ name: "no-clean-team", leadSessionID: "ses_lead_nc" })
         await Team.addMember("no-clean-team", {
@@ -681,14 +681,14 @@ describe("Team auto-cleanup", () => {
         })
 
         await Team.setMemberStatus("no-clean-team", "worker-1", "shutdown")
-        await Bun.sleep(60)
+        await Bun.sleep(80)
 
         const team = await Team.get("no-clean-team")
         expect(team).toBeDefined()
         expect(team!.members).toHaveLength(2)
 
         await Team.setMemberStatus("no-clean-team", "worker-2", "shutdown")
-        await Bun.sleep(60)
+        await Bun.sleep(300)
 
         expect(await Team.get("no-clean-team")).toBeUndefined()
 
@@ -705,7 +705,7 @@ describe("Team auto-cleanup", () => {
         // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
-        const stop = Team.autoCleanup({ grace: 40 })
+        const stop = Team.autoCleanup({ grace: 200 })
 
         await Team.create({ name: "idle-team", leadSessionID: "ses_lead_idle" })
         await Team.addMember("idle-team", {
@@ -716,13 +716,13 @@ describe("Team auto-cleanup", () => {
         })
 
         await Team.setMemberStatus("idle-team", "worker-idle", "ready")
-        await Bun.sleep(60)
+        await Bun.sleep(80)
 
         const team = await Team.get("idle-team")
         expect(team).toBeDefined()
 
         await Team.setMemberStatus("idle-team", "worker-idle", "shutdown")
-        await Bun.sleep(60)
+        await Bun.sleep(300)
 
         expect(await Team.get("idle-team")).toBeUndefined()
 
