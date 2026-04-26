@@ -2035,7 +2035,7 @@ export namespace Team {
         from: name,
         to: "lead",
         text,
-        metadata: status === "completed" ? { completionStatus: status } : undefined,
+        metadata: { completionStatus: status },
       })
     } catch (err: unknown) {
       log.warn("failed to notify lead of teammate completion", {

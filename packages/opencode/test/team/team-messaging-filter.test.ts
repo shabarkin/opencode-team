@@ -95,6 +95,43 @@ describe("team messaging filter", () => {
     })
   })
 
+  test("post-collection completion notices stay in lead inbox without waking the lead", async () => {
+    await using tmp = await tmpdir()
+    await Instance.provide({
+      directory: tmp.path,
+      init: async () => {
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
+      },
+      fn: async () => {
+        const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
+        const { lead } = await basic("completion-inbox-only")
+        await Team.setDelivered("completion-inbox-only", true)
+
+        await TeamMessaging.send({
+          teamName: "completion-inbox-only",
+          from: "worker",
+          to: "lead",
+          text: "I have finished my current work and am now idle.",
+          metadata: { completionStatus: "completed" },
+        })
+
+        expect(await Inbox.all("completion-inbox-only", "lead")).toHaveLength(1)
+        expect(
+          (await Session.messages({ sessionID: SessionID.make(lead.id) })).some((msg) =>
+            msg.parts.some((part) =>
+              part.type === "text" && part.text.includes("I have finished my current work and am now idle."),
+            ),
+          ),
+        ).toBe(false)
+        expect(await TeamMessaging.recoverInbox("completion-inbox-only", "lead", lead.id)).toBe(0)
+        expect(loop).not.toHaveBeenCalled()
+
+        loop.mockRestore()
+        await finish("completion-inbox-only")
+      },
+    })
+  })
+
   test("markRead skips receipts unless the team opts in", async () => {
     await using tmp = await tmpdir()
     await Instance.provide({

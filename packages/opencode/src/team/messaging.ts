@@ -58,6 +58,19 @@ function shouldInject(type?: MessageType, priority?: MessagePriority) {
   return true
 }
 
+function completionStatus(metadata?: Record<string, unknown>) {
+  return typeof metadata?.completionStatus === "string"
+}
+
+function shouldDeliverSession(
+  team: NonNullable<Awaited<ReturnType<typeof Team.get>>>,
+  input: { to: string; metadata?: Record<string, unknown> },
+) {
+  if (input.to !== "lead") return true
+  if (!team.delivered) return true
+  return !completionStatus(input.metadata)
+}
+
 function threadId(input: { threadId?: string; replyTo?: string }, id: string) {
   return input.threadId ?? input.replyTo ?? id
 }
@@ -156,7 +169,9 @@ export namespace TeamMessaging {
       await Team.cancelMember(input.teamName, input.to).catch(() => false)
     }
 
-    if (!queue(status, input.priority) && shouldInject(input.type, input.priority)) {
+    const deliverable =
+      !queue(status, input.priority) && shouldInject(input.type, input.priority) && shouldDeliverSession(team, input)
+    if (deliverable) {
       await deliver(input.teamName, input.to, targetSessionID, input.from, { ...next, read: false })
     }
 
@@ -174,8 +189,7 @@ export namespace TeamMessaging {
 
     // Auto-wake: if the recipient session is idle, start its prompt loop
     // so the LLM processes the injected message.
-    if (!queue(status, input.priority) && shouldInject(input.type, input.priority))
-      autoWake(targetSessionID, input.from)
+    if (deliverable) autoWake(targetSessionID, input.from)
   }
 
   /**
@@ -359,9 +373,11 @@ export namespace TeamMessaging {
       before = page.cursor
     }
 
+    const team = await Team.get(teamName)
     let count = 0
     for (const msg of pending) {
       if (delivered.has(msg.id)) continue
+      if (agentName === "lead" && team?.delivered && completionStatus(msg.metadata)) continue
       await deliver(teamName, agentName, sessionID, msg.from, msg)
       count++
     }
