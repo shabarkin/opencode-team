@@ -2,6 +2,7 @@ import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { Inbox } from "../team/inbox"
 import { Team } from "../team"
+import { Bounded } from "./team-schema"
 
 function picks(team: Awaited<ReturnType<typeof Team.get>>, members?: string[]) {
   if (!team) return { ok: false as const, error: "Team not found." }
@@ -112,8 +113,8 @@ export const Parameters = Schema.Struct({
   waive: Schema.optional(Schema.mutable(Schema.Array(Schema.String))).annotate({
     description: "Optional teammate names to treat as collected without a fresh structured result.",
   }),
-  timeout_seconds: Schema.optional(Schema.Number),
-  poll_interval_seconds: Schema.optional(Schema.Number),
+  timeout_seconds: Schema.optional(Bounded(10, 600)),
+  poll_interval_seconds: Schema.optional(Bounded(5, 60)),
 })
 
 type Metadata = {

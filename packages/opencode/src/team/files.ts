@@ -67,7 +67,6 @@ export function initFileTracking(): () => void {
   return Bus.subscribe(File.Event.Edited, async (event) => {
     const sessionID = event.properties.sessionID
     const file = event.properties.file
-    if (!sessionID) return
 
     // Find which team this session belongs to
     const info = await Team.findBySession(sessionID).catch(() => undefined)

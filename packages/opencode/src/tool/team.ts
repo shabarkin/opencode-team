@@ -21,6 +21,7 @@ import { TeamPhaseTool, TeamShutdownAllTool } from "./team-lifecycle"
 import { SessionID } from "../session/schema"
 import { Inbox } from "../team/inbox"
 import { activeConflicts } from "../team/files"
+import { AtLeast, SafeName } from "./team-schema"
 
 const MESSAGE_TYPE_VALUES = [
   "message",
@@ -45,7 +46,7 @@ const MERGE_ACTION_VALUES = ["merge", "continue", "abort", "mark_resolved"] as c
  * Create a new agent team. Only the lead session should call this.
  */
 export const TeamCreateParameters = Schema.Struct({
-  name: Schema.String.annotate({ description: "Team name — lowercase, hyphens allowed. E.g. 'auth-review', 'feature-impl'" }),
+  name: SafeName.annotate({ description: "Team name — lowercase, hyphens allowed. E.g. 'auth-review', 'feature-impl'" }),
   tasks: Schema.optional(
     Schema.mutable(
       Schema.Array(
@@ -250,7 +251,7 @@ export const TeamCreateTool = Tool.define<typeof TeamCreateParameters, TeamCreat
  * Spawn a new teammate — creates a child session and starts its prompt loop.
  */
 export const TeamSpawnParameters = Schema.Struct({
-  name: Schema.optional(Schema.String).annotate({
+  name: Schema.optional(SafeName).annotate({
     description: "Unique name for this teammate, e.g. 'security-reviewer', 'frontend-impl'",
   }),
   agent: Schema.optional(Schema.String).annotate({
@@ -288,7 +289,7 @@ export const TeamSpawnParameters = Schema.Struct({
     description:
       "'research' = read-only (no write/edit/bash). 'implementation' = full access. Default: 'mixed'.",
   }),
-  result_deadline: Schema.optional(Schema.Number).annotate({
+  result_deadline: Schema.optional(AtLeast(1)).annotate({
     description:
       "Optional result deadline in minutes. The teammate and lead are warned if no result arrives in time.",
   }),
@@ -534,7 +535,7 @@ export const TeamSpawnTool = Tool.define<typeof TeamSpawnParameters, TeamSpawnMe
 
 export const TeamRequestSpawnParameters = Schema.Struct({
   agent: Schema.String.annotate({ description: "Exact agent name to request." }),
-  name: Schema.optional(Schema.String).annotate({ description: "Optional suggested teammate name" }),
+  name: Schema.optional(SafeName).annotate({ description: "Optional suggested teammate name" }),
   rationale: Schema.String.annotate({ description: "Why this teammate is needed" }),
   prompt: Schema.optional(Schema.String).annotate({ description: "Optional suggested prompt for the new teammate" }),
 })
@@ -1007,7 +1008,7 @@ export const TeamClaimTool = Tool.define<typeof TeamClaimParameters, TeamClaimMe
  * Approve or reject a teammate's plan — lifts write restrictions on approval.
  */
 export const TeamApprovePlanParameters = Schema.Struct({
-  name: Schema.String.annotate({ description: "Name of the teammate whose plan to review" }),
+  name: SafeName.annotate({ description: "Name of the teammate whose plan to review" }),
   approved: Schema.Boolean.annotate({
     description: "true to approve the plan and unlock write access, false to reject",
   }),
@@ -1137,7 +1138,7 @@ export const TeamApprovePlanTool = Tool.define<
  * Request a teammate to shut down. The teammate can approve or reject.
  */
 export const TeamShutdownParameters = Schema.Struct({
-  name: Schema.String.annotate({ description: "Name of the teammate to shut down" }),
+  name: SafeName.annotate({ description: "Name of the teammate to shut down" }),
   reason: Schema.optional(Schema.String).annotate({ description: "Reason for the shutdown request" }),
 })
 
@@ -1210,8 +1211,8 @@ export const TeamShutdownTool = Tool.define<typeof TeamShutdownParameters, TeamS
  * Merge teammate worktree branches into the lead branch.
  */
 export const TeamMergeParameters = Schema.Struct({
-  name: Schema.String.annotate({ description: "Team name to merge" }),
-  member: Schema.optional(Schema.String).annotate({ description: "Optional single teammate to merge" }),
+  name: SafeName.annotate({ description: "Team name to merge" }),
+  member: Schema.optional(SafeName).annotate({ description: "Optional single teammate to merge" }),
   action: Schema.optional(Schema.Literals(MERGE_ACTION_VALUES)).annotate({ description: "Merge action to run" }),
 })
 
@@ -1288,7 +1289,7 @@ export const TeamMergeTool = Tool.define<typeof TeamMergeParameters, TeamMergeMe
  * Clean up the team — remove config and task files.
  */
 export const TeamCleanupParameters = Schema.Struct({
-  name: Schema.String.annotate({ description: "Team name to clean up" }),
+  name: SafeName.annotate({ description: "Team name to clean up" }),
   force: Schema.optional(Schema.Boolean).annotate({ description: "Force straggler shutdown before cleanup" }),
 })
 

@@ -4,6 +4,8 @@ import { Bus } from "../bus"
 import { Inbox } from "../team/inbox"
 import { TeamMessaging } from "../team/messaging"
 import { Team, TeamEvent, TeamTasks } from "../team"
+import { SubmittedResultSchema } from "../team/events"
+import { Bounded, SafeName } from "./team-schema"
 
 const RESULT_STATUS_VALUES = ["success", "partial", "blocked", "failed"] as const
 const EVIDENCE_TIER_VALUES = ["publicly_evidenced", "strong_analogue", "hypothesis"] as const
@@ -64,10 +66,10 @@ function filter(
 
 export const InboxParameters = Schema.Struct({
   action: Schema.Literals(INBOX_ACTION_VALUES),
-  member: Schema.optional(Schema.String).annotate({
+  member: Schema.optional(SafeName).annotate({
     description: "Optional teammate inbox to inspect. Lead only.",
   }),
-  limit: Schema.optional(Schema.Number),
+  limit: Schema.optional(Bounded(1, 50)),
   unread_only: Schema.optional(Schema.Boolean),
   since: Schema.optional(Schema.Number),
 })
@@ -222,6 +224,22 @@ export const TeamSubmitResultTool = Tool.define<typeof SubmitResultParameters, S
             return { title: "Error", output: "Only teammates can submit structured results.", metadata: {} }
           }
 
+          // Re-parse through SubmittedResultSchema (the source of truth for the
+          // ResultSubmitted event payload) so any drift between the tool's
+          // Effect.Schema params and the zod event schema fails fast with a
+          // clear error, and so the zod-only bounds (title.max(120),
+          // summary.max(2000), confidence.min(0).max(1)) are enforced.
+          let result: ReturnType<typeof SubmittedResultSchema.parse>
+          try {
+            result = SubmittedResultSchema.parse(params)
+          } catch (err) {
+            return {
+              title: "Error",
+              output: `Invalid result: ${err instanceof Error ? err.message : String(err)}`,
+              metadata: {},
+            }
+          }
+
           if (params.task_id) {
             yield* Effect.promise(() => TeamTasks.complete(info.team.name, params.task_id!))
           }
@@ -233,7 +251,7 @@ export const TeamSubmitResultTool = Tool.define<typeof SubmitResultParameters, S
               to: "lead",
               text: resultText(params),
               type: "result",
-              metadata: { result: params },
+              metadata: { result },
             }),
           )
 
@@ -241,7 +259,7 @@ export const TeamSubmitResultTool = Tool.define<typeof SubmitResultParameters, S
             Bus.publish(TeamEvent.ResultSubmitted, {
               teamName: info.team.name,
               memberName: info.memberName!,
-              result: params as any,
+              result,
               taskId: params.task_id,
             }),
           )
@@ -258,8 +276,8 @@ export const TeamSubmitResultTool = Tool.define<typeof SubmitResultParameters, S
 
 export const WaitParameters = Schema.Struct({
   for: Schema.Literals(WAIT_FOR_VALUES),
-  member: Schema.optional(Schema.String),
-  timeout_hint_seconds: Schema.optional(Schema.Number),
+  member: Schema.optional(SafeName),
+  timeout_hint_seconds: Schema.optional(Bounded(5, 300)),
 })
 
 type WaitMetadata = {
