@@ -25,26 +25,38 @@ import * as ProviderNs from "../provider/provider"
 import * as ProjectNs from "../project/project"
 import * as MessageV2Ns from "../session/message-v2"
 import { MessageID, PartID, type SessionID } from "../session/schema"
+import { lazy } from "@/util/lazy"
+
+/**
+ * `makeRuntime` is called eagerly per-Service below. When this module sits in
+ * an import cycle (tool/registry.ts → tool/team.ts → team/index.ts → here →
+ * agent/agent.ts which is mid-evaluation because the cycle started at
+ * app-runtime → agent), reading `Service` at module top-level throws TDZ.
+ *
+ * Each makeRuntime call below is wrapped in `lazy()` to defer the Service
+ * lookup until first use — by then every namespace's exports are fully
+ * initialised.
+ */
 
 // ---------------------------------------------------------------------------
 // Storage
 // ---------------------------------------------------------------------------
 
-const storageRt = makeRuntime(StorageNs.Service, StorageNs.defaultLayer)
+const storageRt = lazy(() => makeRuntime(StorageNs.Service, StorageNs.defaultLayer))
 
 export const Storage = {
-  write: <T>(key: string[], content: T) => storageRt.runPromise((s) => s.write(key, content)),
-  read: <T>(key: string[]) => storageRt.runPromise((s) => s.read<T>(key)),
-  update: <T>(key: string[], fn: (draft: T) => void) => storageRt.runPromise((s) => s.update<T>(key, fn)),
-  remove: (key: string[]) => storageRt.runPromise((s) => s.remove(key)),
-  list: (prefix: string[]) => storageRt.runPromise((s) => s.list(prefix)),
+  write: <T>(key: string[], content: T) => storageRt().runPromise((s) => s.write(key, content)),
+  read: <T>(key: string[]) => storageRt().runPromise((s) => s.read<T>(key)),
+  update: <T>(key: string[], fn: (draft: T) => void) => storageRt().runPromise((s) => s.update<T>(key, fn)),
+  remove: (key: string[]) => storageRt().runPromise((s) => s.remove(key)),
+  list: (prefix: string[]) => storageRt().runPromise((s) => s.list(prefix)),
 }
 
 // ---------------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------------
 
-const sessionRt = makeRuntime(SessionNs.Service, SessionNs.defaultLayer)
+const sessionRt = lazy(() => makeRuntime(SessionNs.Service, SessionNs.defaultLayer))
 
 /**
  * Creates a session with an explicit directory (used by team worktree spawn).
@@ -91,18 +103,18 @@ function createNextEffect(input: {
 }
 
 export const Session = {
-  get: (id: SessionID) => sessionRt.runPromise((s) => s.get(id)),
+  get: (id: SessionID) => sessionRt().runPromise((s) => s.get(id)),
   setPermission: (input: { sessionID: SessionID; permission: any }) =>
-    sessionRt.runPromise((s) => s.setPermission(input)),
-  remove: (id: SessionID) => sessionRt.runPromise((s) => s.remove(id)),
-  messages: (input: { sessionID: SessionID; limit?: number }) => sessionRt.runPromise((s) => s.messages(input)),
-  children: (parentID: SessionID) => sessionRt.runPromise((s) => s.children(parentID)),
-  updateMessage: <T extends MessageV2Ns.Info>(msg: T) => sessionRt.runPromise((s) => s.updateMessage(msg)),
-  updatePart: <T extends MessageV2Ns.Part>(part: T) => sessionRt.runPromise((s) => s.updatePart(part)),
+    sessionRt().runPromise((s) => s.setPermission(input)),
+  remove: (id: SessionID) => sessionRt().runPromise((s) => s.remove(id)),
+  messages: (input: { sessionID: SessionID; limit?: number }) => sessionRt().runPromise((s) => s.messages(input)),
+  children: (parentID: SessionID) => sessionRt().runPromise((s) => s.children(parentID)),
+  updateMessage: <T extends MessageV2Ns.Info>(msg: T) => sessionRt().runPromise((s) => s.updateMessage(msg)),
+  updatePart: <T extends MessageV2Ns.Part>(part: T) => sessionRt().runPromise((s) => s.updatePart(part)),
   create: (input?: { parentID?: SessionID; title?: string; permission?: any }) =>
-    sessionRt.runPromise((s) => s.create(input)),
+    sessionRt().runPromise((s) => s.create(input)),
   createNext: (input: { parentID?: SessionID; directory: string; title?: string; permission?: any }) =>
-    sessionRt.runPromise(() => createNextEffect(input)),
+    sessionRt().runPromise(() => createNextEffect(input)),
   // Sync generator — re-export as-is; uses Database.use which doesn't need a runtime.
   list: SessionNs.list,
 }
@@ -111,20 +123,20 @@ export const Session = {
 // SessionStatus
 // ---------------------------------------------------------------------------
 
-const sessionStatusRt = makeRuntime(SessionStatusNs.Service, SessionStatusNs.defaultLayer)
+const sessionStatusRt = lazy(() => makeRuntime(SessionStatusNs.Service, SessionStatusNs.defaultLayer))
 
 export const SessionStatus = {
-  get: (sessionID: SessionID) => sessionStatusRt.runPromise((s) => s.get(sessionID)),
-  list: () => sessionStatusRt.runPromise((s) => s.list()),
+  get: (sessionID: SessionID) => sessionStatusRt().runPromise((s) => s.get(sessionID)),
+  list: () => sessionStatusRt().runPromise((s) => s.list()),
   set: (sessionID: SessionID, status: SessionStatusNs.Info) =>
-    sessionStatusRt.runPromise((s) => s.set(sessionID, status)),
+    sessionStatusRt().runPromise((s) => s.set(sessionID, status)),
 }
 
 // ---------------------------------------------------------------------------
 // SessionPrompt
 // ---------------------------------------------------------------------------
 
-const sessionPromptRt = makeRuntime(SessionPromptNs.Service, SessionPromptNs.defaultLayer)
+const sessionPromptRt = lazy(() => makeRuntime(SessionPromptNs.Service, SessionPromptNs.defaultLayer))
 
 /**
  * Original team `inject` — synthesizes a user message into a session as if
@@ -193,11 +205,11 @@ function injectEffect(input: {
 }
 
 export const SessionPrompt = {
-  cancel: (sessionID: SessionID) => sessionPromptRt.runPromise((s) => s.cancel(sessionID)),
+  cancel: (sessionID: SessionID) => sessionPromptRt().runPromise((s) => s.cancel(sessionID)),
   loop: (input: SessionPromptNs.LoopInput | { sessionID: SessionID }) =>
-    sessionPromptRt.runPromise((s) => s.loop(input as SessionPromptNs.LoopInput)),
+    sessionPromptRt().runPromise((s) => s.loop(input as SessionPromptNs.LoopInput)),
   prompt: (input: SessionPromptNs.PromptInput) =>
-    sessionPromptRt.runPromise((s) => s.prompt(input)),
+    sessionPromptRt().runPromise((s) => s.prompt(input)),
   inject: (input: {
     sessionID: SessionID
     text: string
@@ -205,25 +217,25 @@ export const SessionPrompt = {
     metadata?: Record<string, unknown>
     messageID?: string
     partID?: string
-  }) => sessionRt.runPromise(() => injectEffect(input)),
+  }) => sessionRt().runPromise(() => injectEffect(input)),
 }
 
 // ---------------------------------------------------------------------------
 // Agent
 // ---------------------------------------------------------------------------
 
-const agentRt = makeRuntime(AgentNs.Service, AgentNs.defaultLayer)
+const agentRt = lazy(() => makeRuntime(AgentNs.Service, AgentNs.defaultLayer))
 
 export const Agent = {
-  get: (name: string) => agentRt.runPromise((s) => s.get(name)),
-  list: () => agentRt.runPromise((s) => s.list()),
+  get: (name: string) => agentRt().runPromise((s) => s.get(name)),
+  list: () => agentRt().runPromise((s) => s.list()),
 }
 
 // ---------------------------------------------------------------------------
 // Plugin
 // ---------------------------------------------------------------------------
 
-const pluginRt = makeRuntime(PluginNs.Plugin.Service, PluginNs.Plugin.defaultLayer)
+const pluginRt = lazy(() => makeRuntime(PluginNs.Plugin.Service, PluginNs.Plugin.defaultLayer))
 
 export const Plugin = {
   trigger: <
@@ -234,18 +246,18 @@ export const Plugin = {
     name: Name,
     input: Input,
     output: Output,
-  ) => pluginRt.runPromise((s) => s.trigger(name, input as never, output as never)) as Promise<Output>,
+  ) => pluginRt().runPromise((s) => s.trigger(name, input as never, output as never)) as Promise<Output>,
 }
 
 // ---------------------------------------------------------------------------
 // Provider
 // ---------------------------------------------------------------------------
 
-const providerRt = makeRuntime(ProviderNs.Service, ProviderNs.defaultLayer)
+const providerRt = lazy(() => makeRuntime(ProviderNs.Service, ProviderNs.defaultLayer))
 
 export const Provider = {
-  getModel: (providerID: any, modelID: any) => providerRt.runPromise((s) => s.getModel(providerID, modelID)),
-  defaultModel: () => providerRt.runPromise((s) => s.defaultModel()),
+  getModel: (providerID: any, modelID: any) => providerRt().runPromise((s) => s.getModel(providerID, modelID)),
+  defaultModel: () => providerRt().runPromise((s) => s.defaultModel()),
   // Top-level helpers (not on Service)
   parseModel: ProviderNs.parseModel,
   ModelNotFoundError: ProviderNs.ModelNotFoundError,
@@ -255,10 +267,10 @@ export const Provider = {
 // Project
 // ---------------------------------------------------------------------------
 
-const projectRt = makeRuntime(ProjectNs.Service, ProjectNs.defaultLayer)
+const projectRt = lazy(() => makeRuntime(ProjectNs.Service, ProjectNs.defaultLayer))
 
 export const Project = {
-  addSandbox: (id: string, directory: string) => projectRt.runPromise((s) => s.addSandbox(id as any, directory)),
+  addSandbox: (id: string, directory: string) => projectRt().runPromise((s) => s.addSandbox(id as any, directory)),
   removeSandbox: (id: string, directory: string) =>
-    projectRt.runPromise((s) => s.removeSandbox(id as any, directory)),
+    projectRt().runPromise((s) => s.removeSandbox(id as any, directory)),
 }
