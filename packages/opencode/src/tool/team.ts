@@ -323,11 +323,11 @@ export const TeamSpawnTool = Tool.define<typeof TeamSpawnParameters, TeamSpawnMe
   "team_spawn",
   Effect.gen(function* () {
     const agent = yield* Agent.Service
-    const allAgents = yield* agent.list()
-    const agents = allAgents
-      .filter((item) => item.mode !== "primary" && item.hidden !== true)
-      .toSorted((a, b) => a.name.localeCompare(b.name))
-    const names = agents.map((item) => item.name)
+
+    // Note: legacy code listed `Available agent types: ...` here from
+    // Agent.list(), but Tool.define's init runs at AppRuntime layer build
+    // (process-global, no Instance), and Agent.list reads per-instance state.
+    // The agent name is validated in execute and the error message lists names.
 
     return {
       description:
@@ -337,7 +337,7 @@ export const TeamSpawnTool = Tool.define<typeof TeamSpawnParameters, TeamSpawnMe
         "teammate (e.g. use Gemini for research and Claude for implementation). " +
         "As the lead, stay focused on orchestration after spawning: assign work, steer, unblock, monitor, and collect results rather than taking the task back yourself. " +
         "Use the exact configured agent name. " +
-        `Available agent types: ${names.join(", ")}. ` +
+        "If the agent type is unknown, the tool errors with the available names. " +
         "SUBAGENT RELAY: If subagents are used, they CANNOT communicate with the team directly; " +
         "teammates are responsible for relaying any relevant findings.",
       parameters: TeamSpawnParameters,
@@ -420,6 +420,11 @@ export const TeamSpawnTool = Tool.define<typeof TeamSpawnParameters, TeamSpawnMe
           const agentName = params.agent ?? request?.agent ?? "general"
           const resolvedAgent = yield* agent.get(agentName)
           if (!resolvedAgent || resolvedAgent.mode === "primary" || resolvedAgent.hidden === true) {
+            const allAgents = yield* agent.list()
+            const names = allAgents
+              .filter((item) => item.mode !== "primary" && item.hidden !== true)
+              .map((item) => item.name)
+              .sort()
             return {
               title: "Error",
               output: `Agent "${agentName}" not found. Available agents: ${names.join(", ")}`,
@@ -548,11 +553,10 @@ export const TeamRequestSpawnTool = Tool.define<
   "team_request_spawn",
   Effect.gen(function* () {
     const agent = yield* Agent.Service
-    const allAgents = yield* agent.list()
-    const agents = allAgents
-      .filter((item) => item.mode !== "primary" && item.hidden !== true)
-      .toSorted((a, b) => a.name.localeCompare(b.name))
-    const names = agents.map((item) => item.name)
+
+    // See TeamSpawnTool — Agent.list cannot run at Tool.define init time
+    // because it needs Instance context. Defer to execute and surface the
+    // available names in the unknown-agent error path instead.
 
     return {
       description:
@@ -576,6 +580,11 @@ export const TeamRequestSpawnTool = Tool.define<
 
           const resolvedAgent = yield* agent.get(params.agent)
           if (!resolvedAgent || resolvedAgent.mode === "primary" || resolvedAgent.hidden === true) {
+            const allAgents = yield* agent.list()
+            const names = allAgents
+              .filter((item) => item.mode !== "primary" && item.hidden !== true)
+              .map((item) => item.name)
+              .sort()
             return {
               title: "Error",
               output: `Agent "${params.agent}" not found. Available agents: ${names.join(", ")}`,

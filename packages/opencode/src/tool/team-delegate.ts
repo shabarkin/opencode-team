@@ -37,14 +37,15 @@ export const TeamDelegateTool = Tool.define<
     const config = yield* Config.Service
     const sessions = yield* Session.Service
 
-    const allAgents = yield* agent.list()
-    const visibleAgents = allAgents.filter((item) => item.mode !== "primary" && item.hidden !== true)
-    const names = visibleAgents.map((item) => item.name).sort()
-
+    // The legacy implementation listed available agent names in the
+    // description string. That requires Instance context (Agent.list reads
+    // per-instance state), but Tool.define's init now runs at AppRuntime
+    // layer build, before any instance is provisioned. Keep the description
+    // static and surface unknown-agent errors in execute instead.
     return {
       description:
         "Run a lightweight delegated subagent for a teammate without adding a new team member. " +
-        `Available agent types: ${names.join(", ")}. ` +
+        "Pass the desired subagent type as `agent`; if unknown, the tool errors with the available names. " +
         "The delegate does not join the team, has no inbox, and returns its result only to the calling teammate.",
       parameters: Parameters,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context<Metadata>) =>
@@ -58,7 +59,16 @@ export const TeamDelegateTool = Tool.define<
 
           const next = yield* agent.get(params.agent)
           if (!next || next.mode === "primary" || next.hidden === true) {
-            return { title: "Error", output: `Unknown agent type: ${params.agent}`, metadata: {} }
+            const allAgents = yield* agent.list()
+            const visible = allAgents
+              .filter((item) => item.mode !== "primary" && item.hidden !== true)
+              .map((item) => item.name)
+              .sort()
+            return {
+              title: "Error",
+              output: `Unknown agent type: ${params.agent}. Available agents: ${visible.join(", ")}`,
+              metadata: {},
+            }
           }
 
           const cfg = yield* config.get()

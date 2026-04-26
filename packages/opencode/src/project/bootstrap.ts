@@ -49,8 +49,13 @@ export const InstanceBootstrap = Effect.gen(function* () {
   //    spurious MemberStatusChanged events during recovery triggering premature cleanup.
   // Fire-and-forget: don't block bootstrap completion.
   if (Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS) {
+    // The team module is Promise-based and reads `Instance.directory` from
+    // ALS. The Effect.gen wrapping this code can return before the dynamic
+    // import resolves, popping the ALS frame. `Instance.bind` captures the
+    // current ALS context and restores it inside the .then callback.
+    const restore = Instance.bind(<T>(value: T) => value)
     // Dynamic import — only load team module when the feature flag is enabled
-    import("../team").then(({ Team }) => {
+    import("../team").then(restore).then(({ Team }) => {
       Team.onCleanedRestorePermissions()
       Team.recover()
         .catch((err) => {
@@ -62,7 +67,7 @@ export const InstanceBootstrap = Effect.gen(function* () {
           Team.checkpoints()
         })
       // File conflict detection
-      import("../team/files").then(({ initFileTracking }) => initFileTracking())
+      import("../team/files").then(restore).then(({ initFileTracking }) => initFileTracking())
     })
   }
 }).pipe(Effect.withSpan("InstanceBootstrap"))
