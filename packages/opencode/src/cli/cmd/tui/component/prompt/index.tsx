@@ -45,6 +45,7 @@ import { DialogWorkspaceCreate, restoreWorkspaceSession } from "../dialog-worksp
 import { DialogWorkspaceUnavailable } from "../dialog-workspace-unavailable"
 import { useArgs } from "@tui/context/args"
 import { ACTIVE_EXECUTION } from "@/team/events"
+import { DialogTeamSteer } from "../../routes/session/dialog-team-steer"
 
 export type PromptProps = {
   sessionID?: string
@@ -114,6 +115,10 @@ export function Prompt(props: PromptProps) {
       if (m.status === "shutdown") return false
       return ACTIVE_EXECUTION.has(m.execution_status)
     }).length
+  })
+  const steerHint = createMemo(() => {
+    if (team()?.role === "lead") return "steer team"
+    if (status().type !== "idle") return "steer"
   })
   const history = usePromptHistory()
   const stash = usePromptStash()
@@ -363,16 +368,21 @@ export function Prompt(props: PromptProps) {
         },
       },
       {
-        title: "Steer session",
-        value: "session.steer",
+        title: team()?.role === "lead" ? "Steer team" : "Steer session",
+        value: team()?.role === "lead" ? "team.steer" : "session.steer",
         keybind: "session_steer",
-        category: "Session",
-        hidden: true,
-        enabled: status().type !== "idle" && !team(),
+        category: team()?.role === "lead" ? "Team" : "Session",
+        hidden: team()?.role !== "lead",
+        enabled: team()?.role === "lead" || status().type !== "idle",
         onSelect: async (dialog) => {
+          if (!props.sessionID) return
+          if (team()?.role === "lead") {
+            dialog.replace(() => <DialogTeamSteer sessionID={props.sessionID!} />)
+            return
+          }
+
           if (autocomplete.visible) return
           if (!input.focused) return
-          if (!props.sessionID) return
 
           const result = await DialogPrompt.show(dialog, "Steer session", {
             placeholder: "Tell the agent how to adjust course",
@@ -1486,9 +1496,9 @@ export function Prompt(props: PromptProps) {
                     {store.interrupt > 0 ? "again to interrupt" : "interrupt"}
                   </span>
                 </text>
-                <Show when={!team()}>
+                <Show when={steerHint()}>
                   <text fg={theme.text}>
-                    {keybind.print("session_steer")} <span style={{ fg: theme.textMuted }}>steer</span>
+                    {keybind.print("session_steer")} <span style={{ fg: theme.textMuted }}>{steerHint()}</span>
                   </text>
                 </Show>
               </box>

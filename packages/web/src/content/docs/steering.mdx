@@ -50,12 +50,12 @@ Steering gives the lead a fast feedback loop for:
 
 ### Steer a normal session
 
-When a non-team session is busy, the TUI exposes a steering prompt action.
+When a non-team session is busy, the TUI exposes a steering prompt action via `session_steer` (`ctrl+s` by default).
 That action posts to the session steering route and injects follow-up instructions.
 
-### Steer a team from the header
+### Steer a team from the prompt footer or command palette
 
-Lead sessions show a **Steer** action in the session header.
+Lead sessions show a **Steer team** action via `session_steer` (`ctrl+s` by default) and in the command palette.
 The team steer dialog supports:
 
 - **Message** one teammate

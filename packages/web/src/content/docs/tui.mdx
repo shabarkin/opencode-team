@@ -302,10 +302,10 @@ Unshare current session. [Learn more](/docs/share#un-sharing).
 ## Manage teams
 
 With `OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1`, lead sessions can coordinate teammates from the TUI.
-The header and sidebar show member status, task progress, and pending spawn requests.
+The sidebar and footer show member status, task progress, and pending spawn requests.
 
 - Use `session_child_first`, `session_child_cycle`, and `session_parent` to move between the lead and teammate sessions.
-- Use the **Steer** action to send follow-up instructions to one teammate or all active teammates.
+- Use `session_steer` (`ctrl+s` by default) to open the team steer dialog and send follow-up instructions to one teammate or all active teammates.
 - Use `team_message` in the prompt when you want to send direct coordination messages.
 
 This fork-specific workflow is experimental and may change.
