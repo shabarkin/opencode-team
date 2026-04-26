@@ -1,17 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import { Instance } from "../../src/project/instance"
-// TODO(team): /steer, /team-message routes on session were team-feature additions
-// (see git show feat/agent-teams:packages/opencode/src/server/routes/session.ts).
-// They are not yet re-grafted onto the new instance/session.ts route module after the
-// upstream PR #19316 reorg. Re-enable once those routes are added back; the tests below
-// are kept as-is so we can flip `describe.skip` to `describe` later.
-const SessionRoutes = (() => ({
-  request: (..._args: unknown[]): Promise<Response> => {
-    throw new Error("SessionRoutes /steer and /team-message routes not re-grafted yet")
-  },
-})) as unknown as () => { request: (input: string, init?: RequestInit) => Promise<Response> }
-import { Session } from "../../src/team/runtime"
-const SessionPrompt = { steer: (..._args: unknown[]) => Promise.resolve() } as any
+import { SessionRoutes } from "../../src/server/routes/instance/session"
+import { Session, SessionPrompt } from "../../src/team/runtime"
 import { MessageV2 } from "../../src/session/message-v2"
 import { MessageID, PartID, type SessionID } from "../../src/session/schema"
 import { Team } from "../../src/team"
@@ -42,7 +32,7 @@ async function seed(sessionID: SessionID, text = "seed") {
   })
 }
 
-describe.skip("session team routes", () => {
+describe("session team routes", () => {
   test("steer forwards instructions to session prompt", async () => {
     await using tmp = await tmpdir()
 

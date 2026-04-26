@@ -179,6 +179,21 @@ export const SessionPrompt = {
     messageID?: string
     partID?: string
   }) => sessionRt().runPromise(() => injectEffect(input)),
+  /**
+   * Inject corrective text into a session. If the session is idle, kick the
+   * loop to wake it; otherwise let the in-progress turn pick up the inject on
+   * its next user-message read.
+   */
+  steer: async (sessionID: SessionID, text: string) => {
+    await SessionPrompt.inject({ sessionID, text })
+    try {
+      const status = await SessionStatus.get(sessionID)
+      if (status.type !== "idle") return
+      void SessionPrompt.loop({ sessionID }).catch(() => undefined)
+    } catch {
+      // best-effort wake; surface no error to caller
+    }
+  },
 }
 
 // ---------------------------------------------------------------------------

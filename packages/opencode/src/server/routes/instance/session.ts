@@ -27,8 +27,16 @@ import { zodObject } from "@/util/effect-zod"
 import { Bus } from "@/bus"
 import { NamedError } from "@opencode-ai/shared/util/error"
 import { jsonRequest, runRequest } from "./trace"
+import { caller } from "./caller"
+import { Instance } from "@/project/instance"
+import { InstanceRef } from "@/effect/instance-ref"
 
 const log = Log.create({ service: "server" })
+
+const TeamMessageBody = z.object({
+  to: z.string(),
+  text: z.string(),
+})
 
 export const SessionRoutes = lazy(() =>
   new Hono()
@@ -421,12 +429,115 @@ export const SessionRoutes = lazy(() =>
           sessionID: SessionID.zod,
         }),
       ),
-      async (c) =>
-        jsonRequest("SessionRoutes.abort", c, function* () {
+      async (c) => {
+        const sessionID = c.req.valid("param").sessionID
+        const cid = caller(c)
+        if (cid !== undefined && cid !== sessionID) return c.json({ error: "Forbidden" }, 403)
+        return jsonRequest("SessionRoutes.abort", c, function* () {
           const svc = yield* SessionPrompt.Service
-          yield* svc.cancel(c.req.valid("param").sessionID)
+          yield* svc.cancel(sessionID)
+          const instanceCtx = yield* InstanceRef
+          yield* Effect.promise(() =>
+            (instanceCtx ? Instance.restore(instanceCtx, run) : run()).catch((err) => {
+              log.error("team cancel cascade failed", { err })
+            }),
+          )
+          async function run() {
+            const { Team } = await import("@/team")
+            const match = await Team.findBySession(sessionID)
+            if (match?.role === "lead") {
+              await Team.cancelAllMembers(match.team.name)
+            }
+          }
           return true
+        })
+      },
+    )
+    .post(
+      "/:sessionID/steer",
+      describeRoute({
+        summary: "Steer session",
+        description:
+          "Inject corrective instructions into a running session without cancelling its current work. The session is woken if idle.",
+        operationId: "session.steer",
+        responses: {
+          200: {
+            description: "Steered session",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400, 403, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: SessionID.zod,
         }),
+      ),
+      validator("json", z.object({ text: z.string() })),
+      async (c) => {
+        const sessionID = c.req.valid("param").sessionID
+        if (caller(c) !== sessionID) return c.json({ error: "Forbidden" }, 403)
+        const { text } = c.req.valid("json")
+        const { SessionPrompt: TeamSessionPrompt } = await import("@/team/runtime")
+        await TeamSessionPrompt.steer(sessionID, text)
+        return c.json(true)
+      },
+    )
+    .post(
+      "/:sessionID/team-message",
+      describeRoute({
+        summary: "Send team message",
+        description: "Send a team message from the current session to a teammate or the lead.",
+        operationId: "session.teamMessage",
+        responses: {
+          200: {
+            description: "Sent team message",
+            content: {
+              "application/json": {
+                schema: resolver(z.boolean()),
+              },
+            },
+          },
+          ...errors(400, 403, 404),
+        },
+      }),
+      validator(
+        "param",
+        z.object({
+          sessionID: SessionID.zod,
+        }),
+      ),
+      validator("json", TeamMessageBody),
+      async (c) => {
+        const sessionID = c.req.valid("param").sessionID
+        if (caller(c) !== sessionID) return c.json({ error: "Forbidden" }, 403)
+        const body = c.req.valid("json")
+        const { Team } = await import("@/team")
+        const { TeamMessaging } = await import("@/team/messaging")
+        const match = await Team.findBySession(sessionID)
+        if (!match) return c.json({ error: "Forbidden" }, 403)
+
+        const from = match.role === "lead" ? "lead" : match.memberName
+        if (!from) return c.json({ error: "Forbidden" }, 403)
+
+        try {
+          await TeamMessaging.send({
+            teamName: match.team.name,
+            from,
+            to: body.to,
+            text: body.text,
+          })
+        } catch (err) {
+          log.error("team-message send failed", { err })
+          return c.json({ error: err instanceof Error ? err.message : "send failed" }, 400)
+        }
+        return c.json(true)
+      },
     )
     .post(
       "/:sessionID/share",
