@@ -76,7 +76,7 @@ describe("team routes", () => {
     })
   })
 
-  test("by-session route requires matching caller and redacts session ids for members", async () => {
+  test("by-session route requires matching caller and redacts teammate session ids for members", async () => {
     process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
     await using tmp = await tmpdir()
 
@@ -126,7 +126,7 @@ describe("team routes", () => {
 
         expect(ok.status).toBe(200)
         const body = await ok.json()
-        expect(body.leadSessionID).toBeUndefined()
+        expect(body.leadSessionID).toBe(lead)
         expect(body.role).toBe("member")
         expect(body.team.members[0].prompt).toBeUndefined()
         expect(body.team.members[0].sessionID).toBeUndefined()

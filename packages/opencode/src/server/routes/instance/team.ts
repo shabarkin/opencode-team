@@ -45,6 +45,7 @@ const LeadTeamSessionResponse = z.object({
 const MemberTeamSessionResponse = z.object({
   team: TeamInfoPublicSchema,
   tasks: z.array(TeamTaskSchema),
+  leadSessionID: SessionID.zod,
   role: z.literal("member"),
   memberName: MemberNameSchema.optional(),
 })
@@ -219,6 +220,7 @@ export const TeamRoutes = lazy(() =>
         return c.json({
           team: publicTeam(result.team),
           tasks,
+          leadSessionID: SessionID.make(result.team.leadSessionID),
           role: "member" as const,
           memberName: result.memberName,
         })

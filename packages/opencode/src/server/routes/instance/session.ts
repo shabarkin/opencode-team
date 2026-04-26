@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import { stream } from "hono/streaming"
 import { describeRoute, validator, resolver } from "hono-openapi"
 import { SessionID, MessageID, PartID } from "@/session/schema"
+import { MemberNameSchema } from "@/team/events"
 import z from "zod"
 import { Session } from "@/session"
 import { MessageV2 } from "@/session/message-v2"
@@ -34,8 +35,8 @@ import { InstanceRef } from "@/effect/instance-ref"
 const log = Log.create({ service: "server" })
 
 const TeamMessageBody = z.object({
-  to: z.string(),
-  text: z.string(),
+  to: z.union([z.literal("lead"), MemberNameSchema]),
+  text: z.string().max(10 * 1024),
 })
 
 export const SessionRoutes = lazy(() =>
@@ -431,8 +432,7 @@ export const SessionRoutes = lazy(() =>
       ),
       async (c) => {
         const sessionID = c.req.valid("param").sessionID
-        const cid = caller(c)
-        if (cid !== undefined && cid !== sessionID) return c.json({ error: "Forbidden" }, 403)
+        if (caller(c) !== sessionID) return c.json({ error: "Forbidden" }, 403)
         return jsonRequest("SessionRoutes.abort", c, function* () {
           const svc = yield* SessionPrompt.Service
           yield* svc.cancel(sessionID)

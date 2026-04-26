@@ -84,11 +84,12 @@ opencode
 You can also enable worktree mode with CLI flags on commands that start sessions or servers:
 
 ```bash
-opencode --worktrees
-opencode run --worktrees "implement the feature"
-opencode serve --worktrees
-opencode workspace-serve --worktrees
+OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1 opencode --worktrees
+OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1 opencode run --worktrees "implement the feature"
+OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1 opencode serve --worktrees
 ```
+
+The `--worktrees` flag only toggles isolated teammate worktree mode; Agent Teams still need `OPENCODE_EXPERIMENTAL_AGENT_TEAMS=1` (or `OPENCODE_EXPERIMENTAL=1`).
 
 Once that flag is on, `team_create` marks newly created teams as worktree teams.
 `team_spawn` then attempts to create a dedicated git worktree for each teammate.

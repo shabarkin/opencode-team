@@ -353,8 +353,9 @@ export function Prompt(props: PromptProps) {
           }, 5000)
 
           if (store.interrupt >= 2) {
-            void sdk.client.session.abort({
-              sessionID: props.sessionID,
+            void sdk.fetch(`${sdk.url}/session/${props.sessionID}/abort`, {
+              method: "POST",
+              headers: { "x-opencode-session": props.sessionID },
             })
             setStore("interrupt", 0)
           }

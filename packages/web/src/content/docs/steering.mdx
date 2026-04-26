@@ -117,12 +117,12 @@ The lead can then inspect progress and resume the teammate with a redirect.
 
 | Area | Files |
 | ---- | ----- |
-| Normal session steering | `packages/opencode/src/server/routes/session.ts`, `packages/opencode/src/session/prompt.ts` |
-| Team steering routes | `packages/opencode/src/server/routes/team.ts` |
+| Normal session steering | `packages/opencode/src/server/routes/instance/session.ts`, `packages/opencode/src/team/runtime.ts` |
+| Team steering routes | `packages/opencode/src/server/routes/instance/team.ts` |
 | Team lifecycle hooks | `packages/opencode/src/team/index.ts` |
 | TUI steer dialog | `packages/opencode/src/cli/cmd/tui/routes/session/dialog-team-steer.tsx` |
-| Header and prompt wiring | `packages/opencode/src/cli/cmd/tui/routes/session/header.tsx`, `packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/index.tsx` |
-| Team state refresh | `packages/opencode/src/cli/cmd/tui/context/sync.tsx`, `packages/opencode/src/server/routes/event.ts` |
+| Sidebar/footer and prompt wiring | `packages/opencode/src/cli/cmd/tui/feature-plugins/sidebar/team.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/footer.tsx`, `packages/opencode/src/cli/cmd/tui/component/prompt/index.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/index.tsx` |
+| Team state refresh | `packages/opencode/src/cli/cmd/tui/context/sync.tsx`, `packages/opencode/src/server/routes/instance/event.ts` |
 
 ### Session steering diagram
 

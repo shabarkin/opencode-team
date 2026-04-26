@@ -39,7 +39,7 @@ opencode [project]
 | `--agent`     |       | Agent to use                                                            |
 | `--port`      |       | Port to listen on                                                       |
 | `--hostname`  |       | Hostname to listen on                                                   |
-| `--worktrees` |       | Enable isolated teammate git worktrees for Agent Teams                  |
+| `--worktrees` |       | Enable isolated teammate git worktrees after Agent Teams are enabled    |
 
 ---
 
@@ -351,7 +351,7 @@ opencode run --attach http://localhost:4096 "Explain async/await in JavaScript"
 | `--attach`                       |       | Attach to a running opencode server (e.g., http://localhost:4096)       |
 | `--port`                         |       | Port for the local server (defaults to random port)                     |
 | `--dangerously-skip-permissions` |       | Auto-approve permissions that are not explicitly denied (dangerous!)    |
-| `--worktrees`                    |       | Enable isolated teammate git worktrees for Agent Teams                  |
+| `--worktrees`                    |       | Enable isolated teammate git worktrees after Agent Teams are enabled    |
 
 ---
 
@@ -373,7 +373,7 @@ This starts an HTTP server that provides API access to opencode functionality wi
 | `--hostname`  | Hostname to listen on                                  |
 | `--mdns`      | Enable mDNS discovery                                  |
 | `--cors`      | Additional browser origin(s) to allow CORS             |
-| `--worktrees` | Enable isolated teammate git worktrees for Agent Teams |
+| `--worktrees` | Enable isolated teammate git worktrees after Agent Teams are enabled |
 
 ---
 
@@ -604,6 +604,7 @@ These environment variables enable experimental features that may change or be r
 | `OPENCODE_EXPERIMENTAL_DISABLE_FILEWATCHER`     | boolean | Disable file watcher                    |
 | `OPENCODE_EXPERIMENTAL_EXA`                     | boolean | Enable experimental Exa features        |
 | `OPENCODE_EXPERIMENTAL_AGENT_TEAMS`             | boolean | Enable experimental Agent Teams         |
+| `OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES`   | boolean | Use isolated worktrees for Agent Teams  |
 | `OPENCODE_EXPERIMENTAL_LSP_TY`                  | boolean | Enable TY LSP for python files          |
 | `OPENCODE_EXPERIMENTAL_MARKDOWN`                | boolean | Enable experimental markdown features   |
 | `OPENCODE_EXPERIMENTAL_PLAN_MODE`               | boolean | Enable plan mode                        |

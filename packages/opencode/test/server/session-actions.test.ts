@@ -37,7 +37,10 @@ describe("session action routes", () => {
         const session = await svc.create({})
         const app = Server.Default().app
 
-        const res = await app.request(`/session/${session.id}/abort`, { method: "POST" })
+        const res = await app.request(`/session/${session.id}/abort`, {
+          method: "POST",
+          headers: { "x-opencode-session": session.id },
+        })
 
         expect(res.status).toBe(200)
         expect(await res.json()).toBe(true)

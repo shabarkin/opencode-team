@@ -26,6 +26,9 @@ import * as ProjectNs from "../project/project"
 import * as MessageV2Ns from "../session/message-v2"
 import { MessageID, PartID, type SessionID } from "../session/schema"
 import { lazy } from "@/util/lazy"
+import { Log } from "@/util"
+
+const log = Log.create({ service: "team.runtime" })
 
 /**
  * `makeRuntime` is called eagerly per-Service below. When this module sits in
@@ -186,13 +189,14 @@ export const SessionPrompt = {
    */
   steer: async (sessionID: SessionID, text: string) => {
     await SessionPrompt.inject({ sessionID, text })
-    try {
-      const status = await SessionStatus.get(sessionID)
-      if (status.type !== "idle") return
-      void SessionPrompt.loop({ sessionID }).catch(() => undefined)
-    } catch {
-      // best-effort wake; surface no error to caller
-    }
+    const status = await SessionStatus.get(sessionID)
+    if (status.type !== "idle") return
+    void SessionPrompt.loop({ sessionID }).catch((err) => {
+      log.warn("steer wake failed", {
+        sessionID,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    })
   },
 }
 

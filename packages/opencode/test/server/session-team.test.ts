@@ -225,4 +225,45 @@ describe("session team routes", () => {
       },
     })
   })
+
+  test("abort rejects missing caller session", async () => {
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const lead = (await Session.create({})).id
+
+        const app = SessionRoutes()
+        const res = await app.request(`/${lead}/abort`, {
+          method: "POST",
+        })
+
+        expect(res.status).toBe(403)
+      },
+    })
+  })
+
+  test("team-message rejects invalid recipient names", async () => {
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const lead = (await Session.create({})).id
+
+        const app = SessionRoutes()
+        const res = await app.request(`/${lead}/team-message`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": lead,
+          },
+          body: JSON.stringify({ to: "../worker", text: "please check this" }),
+        })
+
+        expect(res.status).toBe(400)
+      },
+    })
+  })
 })

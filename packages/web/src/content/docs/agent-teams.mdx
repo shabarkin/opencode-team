@@ -44,7 +44,7 @@ At a high level:
 | Core state | New `packages/opencode/src/team/` services for lifecycle, messaging, recovery, worktrees, merges, notepad, conflict tracking, and policy hooks |
 | Tooling | New `team_*` tools for creation, spawning, messaging, review, collection, shutdown, health, restart, merge, and cleanup |
 | Server | New `/team` routes for session-scoped team state and steering |
-| TUI | Team dialog, steer dialog, team-aware header/sidebar state, and prompt-level teammate messaging |
+| TUI | Team dialog, steer dialog, team-aware sidebar/footer state, and prompt-level teammate messaging |
 | UI rendering | Custom cards for `team_create`, `team_spawn`, `team_delegate`, and `team_request_spawn` parts |
 | Recovery and safety | Restart recovery, inbox durability, freshness checks, shutdown guards, conflict detection, and budget/deadline enforcement |
 
@@ -167,9 +167,9 @@ See [Worktrees](/docs/worktrees).
 | Conflict tracking | `packages/opencode/src/team/files.ts` |
 | Policy hooks | `packages/opencode/src/team/policy.ts`, `packages/plugin/src/index.ts` |
 | Tool surface | `packages/opencode/src/tool/team.ts`, `team-collect.ts`, `team-inbox.ts`, `team-lifecycle.ts`, `team-status.ts`, `team-notepad.ts`, `team-delegate.ts` |
-| HTTP routes | `packages/opencode/src/server/routes/team.ts`, `packages/opencode/src/server/routes/session.ts` |
-| TUI surfaces | `packages/opencode/src/cli/cmd/tui/component/dialog-team.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/dialog-team-steer.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/header.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/sidebar.tsx`, `packages/opencode/src/cli/cmd/tui/context/sync.tsx` |
-| UI message rendering | `packages/ui/src/components/message-part-team.ts`, `packages/ui/src/components/message-part.tsx` |
+| HTTP routes | `packages/opencode/src/server/routes/instance/team.ts`, `packages/opencode/src/server/routes/instance/session.ts` |
+| TUI surfaces | `packages/opencode/src/cli/cmd/tui/component/dialog-team.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/dialog-team-steer.tsx`, `packages/opencode/src/cli/cmd/tui/feature-plugins/sidebar/team.tsx`, `packages/opencode/src/cli/cmd/tui/routes/session/footer.tsx`, `packages/opencode/src/cli/cmd/tui/context/sync.tsx` |
+| UI message rendering | `packages/ui/src/components/message-part.tsx` |
 | Test coverage | `packages/opencode/test/team/`, `packages/opencode/test/server/team-routes.test.ts`, `packages/opencode/test/tool/task-team-isolation.test.ts` |
 
 ### Component diagram

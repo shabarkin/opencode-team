@@ -1019,38 +1019,43 @@ describe("team phase 4", () => {
         await seed(lead.id)
         await Team.create({ name: "phase4-timeout", leadSessionID: lead.id })
 
-        const waits: Array<() => Promise<void>> = []
-        const timer = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => Promise<void>) => {
-          waits.push(fn)
+        const waits: Array<{ fn: () => Promise<void>; ms?: number }> = []
+        const timer = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => Promise<void>, ms?: number) => {
+          waits.push({ fn, ms })
           return 1 as any
         }) as any)
         const loop = spyOn(SessionPrompt, "loop").mockImplementation((async () => new Promise(() => {})) as any)
         const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue()
 
-        await Team.spawnMember({
-          teamName: "phase4-timeout",
-          name: "worker",
-          parentSessionID: lead.id,
-          agent: { name: "general" },
-          model: { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" },
-          prompt: "Wait forever",
-          planApproval: false,
-          checkpoint: "none",
-          timeout: 1,
-        })
+        try {
+          await Team.spawnMember({
+            teamName: "phase4-timeout",
+            name: "worker",
+            parentSessionID: lead.id,
+            agent: { name: "general" },
+            model: { providerID: "anthropic", modelID: "claude-sonnet-4-20250514" },
+            prompt: "Wait forever",
+            planApproval: false,
+            checkpoint: "none",
+            timeout: 1,
+          })
 
-        await waits[0]!()
+          const timeout = waits.find((item) => item.ms === 60_000)
+          expect(timeout).toBeDefined()
+          await timeout!.fn()
 
-        const team = await Team.get("phase4-timeout")
-        const member = team?.members.find((item) => item.name === "worker")
-        expect(member?.error_kind).toBe("timeout")
-        expect(member?.execution_status).toBe("timed_out")
-        expect(member?.status).toBe("error")
+          const team = await Team.get("phase4-timeout")
+          const member = team?.members.find((item) => item.name === "worker")
+          expect(member?.error_kind).toBe("timeout")
+          expect(member?.execution_status).toBe("timed_out")
+          expect(member?.status).toBe("error")
 
-        cancel.mockRestore()
-        loop.mockRestore()
-        timer.mockRestore()
-        await finish("phase4-timeout")
+          await finish("phase4-timeout")
+        } finally {
+          cancel.mockRestore()
+          loop.mockRestore()
+          timer.mockRestore()
+        }
       },
     })
   })

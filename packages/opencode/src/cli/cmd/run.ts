@@ -317,12 +317,13 @@ export const RunCommand = cmd({
       })
       .option("worktrees", {
         type: "boolean",
-        default: false,
         describe: "enable isolated teammate git worktrees for agent teams",
       })
   },
   handler: async (args) => {
-    process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES = args.worktrees ? "true" : "false"
+    if (args.worktrees !== undefined) {
+      process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES = args.worktrees ? "true" : "false"
+    }
     let message = [...args.message, ...(args["--"] || [])]
       .map((arg) => (arg.includes(" ") ? `"${arg.replace(/"/g, '\\"')}"` : arg))
       .join(" ")

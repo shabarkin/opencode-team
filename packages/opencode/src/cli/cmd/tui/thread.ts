@@ -104,7 +104,6 @@ export const TuiThreadCommand = cmd({
       })
       .option("worktrees", {
         type: "boolean",
-        default: false,
         describe: "enable isolated teammate git worktrees for agent teams",
       }),
   handler: async (args) => {
@@ -136,7 +135,9 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
-      process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES = args.worktrees ? "true" : "false"
+      if (args.worktrees !== undefined) {
+        process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS_WORKTREES = args.worktrees ? "true" : "false"
+      }
       const env = sanitizedProcessEnv({
         [OPENCODE_PROCESS_ROLE]: "worker",
         [OPENCODE_RUN_ID]: ensureRunID(),
