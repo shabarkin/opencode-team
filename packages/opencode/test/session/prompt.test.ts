@@ -1883,3 +1883,92 @@ it.live(
     ),
   30_000,
 )
+
+// session.prompt agent hints — re-grafted from feat/agent-teams pre-merge
+// (commit 00ef41980 test/session/prompt.test.ts:252-360). Verifies the
+// TEAM_HINT detection in session/prompt.ts routes @agent mentions to
+// team_create/team_spawn vs. the task tool depending on whether the user
+// asked for an agent team explicitly.
+
+function syntheticText(parts: ReadonlyArray<{ type: string; text?: string; synthetic?: boolean }>) {
+  return parts
+    .filter((p) => p.type === "text" && p.synthetic && typeof p.text === "string")
+    .map((p) => p.text ?? "")
+    .join("\n")
+}
+
+it.live("prefers team tools for explicit team requests with agent mentions", () =>
+  provideTmpdirInstance(
+    (_dir) =>
+      Effect.gen(function* () {
+        const prev = process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+        process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+        try {
+          const prompt = yield* SessionPrompt.Service
+          const sessions = yield* Session.Service
+          const session = yield* sessions.create({})
+          const parts = yield* prompt.resolvePromptParts(
+            "Use an agent team with @general and @explore to review the issue in parallel.",
+          )
+          const msg = yield* prompt.prompt({ sessionID: session.id, noReply: true, parts })
+          const text = syntheticText(msg.parts)
+          expect(text).toContain("team_create/team_spawn")
+          expect(text).not.toContain("call the task tool with subagent")
+        } finally {
+          if (prev === undefined) delete process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+          else process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = prev
+        }
+      }),
+    { git: true },
+  ),
+)
+
+it.live("keeps task hints for non-team agent mentions", () =>
+  provideTmpdirInstance(
+    (_dir) =>
+      Effect.gen(function* () {
+        const prev = process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+        process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+        try {
+          const prompt = yield* SessionPrompt.Service
+          const sessions = yield* Session.Service
+          const session = yield* sessions.create({})
+          const parts = yield* prompt.resolvePromptParts("Ask @general to summarize the latest errors.")
+          const msg = yield* prompt.prompt({ sessionID: session.id, noReply: true, parts })
+          const text = syntheticText(msg.parts)
+          expect(text).toContain("call the task tool with subagent: general")
+          expect(text).not.toContain("team_create/team_spawn")
+        } finally {
+          if (prev === undefined) delete process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+          else process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = prev
+        }
+      }),
+    { git: true },
+  ),
+)
+
+it.live("does not switch to team hints for generic team wording", () =>
+  provideTmpdirInstance(
+    (_dir) =>
+      Effect.gen(function* () {
+        const prev = process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+        process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+        try {
+          const prompt = yield* SessionPrompt.Service
+          const sessions = yield* Session.Service
+          const session = yield* sessions.create({})
+          const parts = yield* prompt.resolvePromptParts(
+            "Ask @general to summarize what our team learned from the latest CI failures.",
+          )
+          const msg = yield* prompt.prompt({ sessionID: session.id, noReply: true, parts })
+          const text = syntheticText(msg.parts)
+          expect(text).toContain("call the task tool with subagent: general")
+          expect(text).not.toContain("team_create/team_spawn")
+        } finally {
+          if (prev === undefined) delete process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+          else process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = prev
+        }
+      }),
+    { git: true },
+  ),
+)
