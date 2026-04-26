@@ -16,11 +16,10 @@
  * const result = await runToolExecute(tool.execute(params, ctx))
  * ```
  */
-import { Effect, Layer, ManagedRuntime } from "effect"
-import { Agent } from "../../src/agent/agent"
-import { Truncate } from "../../src/tool"
+import { Effect, ManagedRuntime } from "effect"
+import { AppLayer } from "../../src/effect/app-runtime"
 
-const runtime = ManagedRuntime.make(Layer.mergeAll(Truncate.defaultLayer, Agent.defaultLayer))
+const runtime = ManagedRuntime.make(AppLayer)
 
 export function initTeamTool(tool: any): Promise<any> {
   return runtime.runPromise(Effect.flatMap(tool as Effect.Effect<{ init: () => Effect.Effect<any> }>, (info) => info.init()))
