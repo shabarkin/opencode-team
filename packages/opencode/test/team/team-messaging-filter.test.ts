@@ -66,7 +66,7 @@ describe("team messaging filter", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)
@@ -100,7 +100,7 @@ describe("team messaging filter", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         await basic("receipts-off")
@@ -124,7 +124,7 @@ describe("team messaging filter", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         const loop = spyOn(SessionPrompt, "loop").mockResolvedValue(undefined as never)

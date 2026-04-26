@@ -36,7 +36,7 @@ describe("team messaging order", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         const lead = await Session.create({})

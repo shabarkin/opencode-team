@@ -1,4 +1,5 @@
 import { describe, expect, spyOn, test } from "bun:test"
+import { Effect } from "effect"
 import { Instance } from "../../src/project/instance"
 import { Log } from "../../src/util"
 import { ModelID, ProviderID } from "../../src/provider/schema"
@@ -42,8 +43,8 @@ function ctx(sessionID: string, messages: any[] = []) {
     agent: "general",
     abort: new AbortController().signal,
     messages,
-    metadata: () => {},
-    ask: async () => {},
+    metadata: () => Effect.void,
+    ask: () => Effect.void,
   } as any
 }
 
@@ -84,7 +85,7 @@ describe("team collect", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
@@ -129,7 +130,7 @@ describe("team collect", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         const { lead } = await basic("collect-ready-no-result", "ready")
@@ -148,7 +149,7 @@ describe("team collect", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
@@ -176,7 +177,7 @@ describe("team collect", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
@@ -220,7 +221,7 @@ describe("team collect", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         const { lead } = await basic("collect-strict-idle", "ready")
@@ -246,7 +247,7 @@ describe("team collect", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         const { lead } = await basic("collect-waive")
@@ -272,7 +273,7 @@ describe("team collect", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)
@@ -300,7 +301,7 @@ describe("team collect", () => {
     await Instance.provide({
       directory: tmp.path,
       init: async () => {
-        process.env.ANTHROPIC_API_KEY = "test-key"
+        // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
       },
       fn: async () => {
         const sleep = spyOn(Bun, "sleep").mockImplementation((async () => undefined) as any)

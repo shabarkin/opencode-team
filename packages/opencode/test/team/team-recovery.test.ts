@@ -50,7 +50,7 @@ describe("Team recovery after restart", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           await Team.create({
@@ -100,7 +100,7 @@ describe("Team recovery after restart", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           await Team.create({
@@ -148,7 +148,7 @@ describe("Team recovery after restart", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           const lead = await Session.create({})
@@ -212,7 +212,7 @@ describe("Team recovery after restart", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           const leadSession = await Session.create({})
@@ -255,7 +255,7 @@ describe("Team recovery after restart", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           await Team.create({
@@ -314,7 +314,7 @@ describe("Team recovery after restart", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           const result = await Team.recover()
@@ -333,7 +333,7 @@ describe("Team recovery after restart", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           await Team.create({ name: "team-alpha", leadSessionID: "ses_alpha" })
@@ -394,7 +394,7 @@ describe("Team recovery after restart", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           await Team.create({ name: "idem-test", leadSessionID: "ses_idem" })

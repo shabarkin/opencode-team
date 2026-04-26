@@ -22,7 +22,7 @@ describe("Team persistence across restarts", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           await Team.create({
@@ -66,7 +66,7 @@ describe("Team persistence across restarts", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           await Team.create({ name: "alpha", leadSessionID: "ses_alpha_p" })
@@ -94,7 +94,7 @@ describe("Team persistence across restarts", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           await Team.create({ name: "find-test", leadSessionID: "ses_lead_find_p" })
@@ -140,7 +140,7 @@ describe("Team persistence across restarts", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           await Team.create({ name: "tasks-test", leadSessionID: "ses_tasks_p" })
@@ -178,7 +178,7 @@ describe("Team persistence across restarts", () => {
       await Instance.provide({
         directory: dir,
         init: async () => {
-          process.env.ANTHROPIC_API_KEY = "test-key"
+          // process.env.ANTHROPIC_API_KEY intentionally not set; tests mock provider calls
         },
         fn: async () => {
           await Team.create({ name: "status-test", leadSessionID: "ses_st_p" })
