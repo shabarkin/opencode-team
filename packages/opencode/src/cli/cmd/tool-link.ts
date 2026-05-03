@@ -1,5 +1,5 @@
 import type { ToolPart } from "@opencode-ai/sdk/v2"
-import { teamSession, teamToolMeta } from "@opencode-ai/shared/util/team-tool-meta"
+import { teamSession, teamToolMeta } from "@opencode-ai/core/util/team-tool-meta"
 
 function text(value: unknown) {
   if (typeof value !== "string" || !value) return

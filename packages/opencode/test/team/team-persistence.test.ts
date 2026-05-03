@@ -3,7 +3,7 @@ import path from "path"
 import fs from "fs/promises"
 import { Instance } from "../../src/project/instance"
 import { Team, TeamTasks } from "../../src/team"
-import { Log } from "../../src/util"
+import * as Log from "@opencode-ai/core/util/log"
 
 Log.init({ print: false })
 

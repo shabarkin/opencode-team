@@ -1,8 +1,8 @@
 import fs from "fs/promises"
 import path from "path"
-import { Global } from "../global"
-import { Log } from "../util"
-import { Process } from "../util"
+import { Global } from "@opencode-ai/core/global"
+import * as Log from "@opencode-ai/core/util/log"
+import * as Process from "../util/process"
 
 /**
  * Promise-style `git` runner. Replaces the removed `util/git.ts` helper.

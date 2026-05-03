@@ -3,13 +3,13 @@ import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { Bus } from "../bus"
 import { FileWatcher } from "../file/watcher"
-import { Instance } from "../project/instance"
+import { InstanceState } from "@/effect/instance-state"
 import { Patch } from "../patch"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { trimDiff } from "./edit"
-import { LSP } from "../lsp"
-import { AppFileSystem } from "@opencode-ai/shared/filesystem"
+import { LSP } from "@/lsp/lsp"
+import { AppFileSystem } from "@opencode-ai/core/filesystem"
 import DESCRIPTION from "./apply_patch.txt"
 import { File } from "../file"
 import { Format } from "../format"
@@ -53,6 +53,8 @@ export const ApplyPatchTool = Tool.define(
         return yield* Effect.fail(new Error("apply_patch verification failed: no hunks found"))
       }
 
+      const instance = yield* InstanceState.context
+
       // Validate file paths and check permissions
       const fileChanges: Array<{
         filePath: string
@@ -69,7 +71,7 @@ export const ApplyPatchTool = Tool.define(
       let totalDiff = ""
 
       for (const hunk of hunks) {
-        const filePath = path.resolve(Instance.directory, hunk.path)
+        const filePath = path.resolve(instance.directory, hunk.path)
         yield* assertExternalDirectoryEffect(ctx, filePath)
 
         switch (hunk.type) {
@@ -134,7 +136,7 @@ export const ApplyPatchTool = Tool.define(
               if (change.removed) deletions += change.count || 0
             }
 
-            const movePath = hunk.move_path ? path.resolve(Instance.directory, hunk.move_path) : undefined
+            const movePath = hunk.move_path ? path.resolve(instance.directory, hunk.move_path) : undefined
             yield* assertExternalDirectoryEffect(ctx, movePath)
 
             fileChanges.push({
@@ -188,7 +190,7 @@ export const ApplyPatchTool = Tool.define(
       // Build per-file metadata for UI rendering (used for both permission and result)
       const files = fileChanges.map((change) => ({
         filePath: change.filePath,
-        relativePath: path.relative(Instance.worktree, change.movePath ?? change.filePath).replaceAll("\\", "/"),
+        relativePath: permPath(change.movePath ?? change.filePath, { dir: instance.directory, root: instance.worktree }),
         type: change.type,
         patch: change.diff,
         additions: change.additions,
@@ -197,7 +199,9 @@ export const ApplyPatchTool = Tool.define(
       }))
 
       // Check permissions if needed
-      const relativePaths = fileChanges.map((c) => permPath(c.filePath))
+      const relativePaths = fileChanges.map((c) =>
+        permPath(c.filePath, { dir: instance.directory, root: instance.worktree }),
+      )
       yield* ctx.ask({
         permission: "edit",
         patterns: relativePaths,
@@ -276,13 +280,13 @@ export const ApplyPatchTool = Tool.define(
       // Generate output summary
       const summaryLines = fileChanges.map((change) => {
         if (change.type === "add") {
-          return `A ${permPath(change.filePath)}`
+          return `A ${permPath(change.filePath, { dir: instance.directory, root: instance.worktree })}`
         }
         if (change.type === "delete") {
-          return `D ${permPath(change.filePath)}`
+          return `D ${permPath(change.filePath, { dir: instance.directory, root: instance.worktree })}`
         }
         const target = change.movePath ?? change.filePath
-        return `M ${permPath(target)}`
+        return `M ${permPath(target, { dir: instance.directory, root: instance.worktree })}`
       })
       let output = `Success. Updated the following files:\n${summaryLines.join("\n")}`
 
@@ -291,7 +295,8 @@ export const ApplyPatchTool = Tool.define(
         const target = change.movePath ?? change.filePath
         const block = LSP.Diagnostic.report(target, diagnostics[AppFileSystem.normalizePath(target)] ?? [])
         if (!block) continue
-        output += `\n\nLSP errors detected in ${permPath(target)}, please fix:\n${block}`
+        const rel = permPath(target, { dir: instance.directory, root: instance.worktree })
+        output += `\n\nLSP errors detected in ${rel}, please fix:\n${block}`
       }
 
       return {

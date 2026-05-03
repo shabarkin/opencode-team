@@ -7,11 +7,11 @@ import {
   type TeamTask,
 } from "../team"
 import { TeamMessaging } from "../team/messaging"
-import { Session } from "../session"
+import { Session } from "../session/session"
 import { Agent } from "../agent/agent"
 import { Bus } from "../bus"
 import { TeamEvent } from "../team/events"
-import { Flag } from "../flag/flag"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { TeamStatusTool } from "./team-status"
 import { TeamNotepadTool } from "./team-notepad"
 import { TeamDelegateTool } from "./team-delegate"

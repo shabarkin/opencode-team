@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import { Instance } from "@/project/instance"
 import { Storage } from "./runtime"
-import { Log } from "@/util"
+import * as Log from "@opencode-ai/core/util/log"
 import type { TeamInfo, TeamMember } from "./events"
 
 const log = Log.create({ service: "team.merge" })

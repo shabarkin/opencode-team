@@ -1,7 +1,7 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import { Effect } from "effect"
 import { Instance } from "../../src/project/instance"
-import { Log } from "../../src/util"
+import * as Log from "@opencode-ai/core/util/log"
 import { Session, SessionPrompt, SessionStatus, Plugin } from "../../src/team/runtime"
 import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { ProviderID, ModelID } from "../../src/provider/schema"

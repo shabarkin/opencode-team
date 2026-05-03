@@ -4,17 +4,17 @@ import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/team/runtime"
 import { Team } from "../../src/team"
 import { TeamRoutes } from "../../src/server/routes/instance/team"
-import { Log } from "../../src/util"
+import * as Log from "@opencode-ai/core/util/log"
 import type { SessionID } from "../../src/session/schema"
 import { resetDatabase } from "../fixture/db"
-import { tmpdir } from "../fixture/fixture"
+import { disposeAllInstances, tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
 
 const flag = process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
 
 afterEach(async () => {
-  await Instance.disposeAll()
+  await disposeAllInstances()
   await resetDatabase()
   if (flag === undefined) delete process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
   if (flag !== undefined) process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = flag

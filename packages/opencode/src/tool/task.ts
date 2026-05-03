@@ -1,16 +1,16 @@
 import * as Tool from "./tool"
 import DESCRIPTION from "./task.txt"
-import { Session } from "../session"
+import { Session } from "@/session/session"
 import { SessionID, MessageID } from "../session/schema"
 import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import type { SessionPrompt } from "../session/prompt"
-import { Config } from "../config"
+import { Config } from "@/config/config"
 import { Effect, Schema } from "effect"
 import { Team } from "../team"
 import { TEAM_TOOL_IDS } from "./team-ids"
 import { childPermission } from "./child-permission"
-import { Log } from "@/util"
+import * as Log from "@opencode-ai/core/util/log"
 
 const log = Log.create({ service: "tool.task" })
 
@@ -85,6 +85,7 @@ export const TaskTool = Tool.define(
       const permission = childPermission({
         tools: teamTools,
         pad: allowPad,
+        todo: canTodo,
         task: canTask,
         primary: cfg.experimental?.primary_tools,
         parent: parent?.permission,
@@ -97,21 +98,20 @@ export const TaskTool = Tool.define(
       if (session && session.parentID !== ctx.sessionID) {
         return yield* Effect.fail(new Error(`task_id "${taskID}" does not belong to this session.`))
       }
-      let nextSession: NonNullable<typeof session>
+      const nextSession = session
+        ? session
+        : yield* sessions.create({
+            parentID: ctx.sessionID,
+            title:
+              params.description +
+              ` (@${next.name} subagent)` +
+              (linked ? ` [${linked.parentTeam}/${linked.parentMember}]` : ""),
+            permission,
+          })
       if (session) {
         yield* sessions
           .setPermission({ sessionID: session.id, permission })
           .pipe(Effect.catchCause(() => Effect.void))
-        nextSession = session
-      } else {
-        nextSession = yield* sessions.create({
-          parentID: ctx.sessionID,
-          title:
-            params.description +
-            ` (@${next.name} subagent)` +
-            (linked ? ` [${linked.parentTeam}/${linked.parentMember}]` : ""),
-          permission,
-        })
       }
       if (linked && nextSession) {
         yield* Effect.promise(() => Team.setTrace(nextSession!.id, linked).catch(() => {}))

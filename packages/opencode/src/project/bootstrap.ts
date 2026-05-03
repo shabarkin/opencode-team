@@ -1,73 +1,102 @@
 import { Plugin } from "../plugin"
 import { Format } from "../format"
-import { LSP } from "../lsp"
+import { LSP } from "@/lsp/lsp"
 import { File } from "../file"
 import { Snapshot } from "../snapshot"
 import * as Project from "./project"
 import * as Vcs from "./vcs"
 import { Bus } from "../bus"
 import { Command } from "../command"
-import { Instance } from "./instance"
-import { Log } from "@/util"
+import { InstanceState } from "@/effect/instance-state"
 import { FileWatcher } from "@/file/watcher"
-import { ShareNext } from "@/share"
-import * as Effect from "effect/Effect"
-import { Config } from "@/config"
-import { Flag } from "@/flag/flag"
+import { ShareNext } from "@/share/share-next"
+import { Context, Effect, Layer } from "effect"
+import { Config } from "@/config/config"
+import { Flag } from "@opencode-ai/core/flag/flag"
+import { Instance } from "./instance"
+import * as Log from "@opencode-ai/core/util/log"
 
-export const InstanceBootstrap = Effect.gen(function* () {
-  Log.Default.info("bootstrapping", { directory: Instance.directory })
-  // everything depends on config so eager load it for nice traces
-  yield* Config.Service.use((svc) => svc.get())
-  // Plugin can mutate config so it has to be initialized before anything else.
-  yield* Plugin.Service.use((svc) => svc.init())
-  yield* Effect.all(
-    [
-      LSP.Service,
-      ShareNext.Service,
-      Format.Service,
-      File.Service,
-      FileWatcher.Service,
-      Vcs.Service,
-      Snapshot.Service,
-    ].map((s) => Effect.forkDetach(s.use((i) => i.init()))),
-  ).pipe(Effect.withSpan("InstanceBootstrap.init"))
+export interface Interface {
+  readonly run: Effect.Effect<void>
+}
 
-  yield* Bus.Service.use((svc) =>
-    svc.subscribeCallback(Command.Event.Executed, async (payload) => {
-      if (payload.properties.name === Command.Default.INIT) {
-        Project.setInitialized(Instance.project.id)
+export class Service extends Context.Service<Service, Interface>()("@opencode/InstanceBootstrap") {}
+
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    // Yield each bootstrap dep at layer init so `run` itself has R = never.
+    // This breaks the circular declaration loop through Config → Instance → InstanceStore
+    // (instance-store.ts only yields this Service tag, never the impl-side services).
+    const bus = yield* Bus.Service
+    const config = yield* Config.Service
+    const file = yield* File.Service
+    const fileWatcher = yield* FileWatcher.Service
+    const format = yield* Format.Service
+    const lsp = yield* LSP.Service
+    const plugin = yield* Plugin.Service
+    const shareNext = yield* ShareNext.Service
+    const snapshot = yield* Snapshot.Service
+    const vcs = yield* Vcs.Service
+
+    const run = Effect.gen(function* () {
+      const ctx = yield* InstanceState.context
+      yield* Effect.logInfo("bootstrapping", { directory: ctx.directory })
+      // everything depends on config so eager load it for nice traces
+      yield* config.get()
+      // Plugin can mutate config so it has to be initialized before anything else.
+      yield* plugin.init()
+      yield* Effect.all(
+        [lsp, shareNext, format, file, fileWatcher, vcs, snapshot].map((s) => Effect.forkDetach(s.init())),
+      ).pipe(Effect.withSpan("InstanceBootstrap.init"))
+
+      const projectID = ctx.project.id
+      yield* bus.subscribeCallback(Command.Event.Executed, async (payload) => {
+        if (payload.properties.name === Command.Default.INIT) {
+          Project.setInitialized(projectID)
+        }
+      })
+
+      if (Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS) {
+        const restore = <T>(fn: () => T) => Instance.restore(ctx, fn)
+        void import("../team").then(({ Team }) =>
+          restore(() => {
+            Team.onCleanedRestorePermissions()
+            void Team.recover()
+              .catch((err) => {
+                Log.Default.warn("team recovery failed", { error: err instanceof Error ? err.message : err })
+              })
+              .finally(() =>
+                restore(() => {
+                  Team.trackResults()
+                  Team.autoCleanup()
+                  Team.checkpoints()
+                }),
+              )
+            void import("../team/files").then(({ initFileTracking }) => restore(() => initFileTracking()))
+          }),
+        )
       }
-    }),
-  )
+    }).pipe(Effect.withSpan("InstanceBootstrap"))
 
-  // Team features — order matters:
-  // 1. onCleanedRestorePermissions() registers synchronously so it's ready
-  //    before recover(), which could trigger cleanup if all members are shutdown.
-  // 2. recover() marks stale busy executions as cancelled, transitions members to ready, and notifies leads.
-  // 3. autoCleanup() subscribes AFTER recover finishes (.finally()) to avoid
-  //    spurious MemberStatusChanged events during recovery triggering premature cleanup.
-  // Fire-and-forget: don't block bootstrap completion.
-  if (Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS) {
-    // The team module is Promise-based and reads `Instance.directory` from
-    // ALS. The Effect.gen wrapping this code can return before the dynamic
-    // import resolves, popping the ALS frame. `Instance.bind` captures the
-    // current ALS context and restores it inside the .then callback.
-    const restore = Instance.bind(<T>(value: T) => value)
-    // Dynamic import — only load team module when the feature flag is enabled
-    import("../team").then(restore).then(({ Team }) => {
-      Team.onCleanedRestorePermissions()
-      Team.recover()
-        .catch((err) => {
-          Log.Default.warn("team recovery failed", { error: err instanceof Error ? err.message : err })
-        })
-        .finally(() => {
-          Team.trackResults()
-          Team.autoCleanup()
-          Team.checkpoints()
-        })
-      // File conflict detection
-      import("../team/files").then(restore).then(({ initFileTracking }) => initFileTracking())
-    })
-  }
-}).pipe(Effect.withSpan("InstanceBootstrap"))
+    return Service.of({ run })
+  }),
+)
+
+export const defaultLayer: Layer.Layer<Service> = layer.pipe(
+  Layer.provide([
+    Bus.layer,
+    Config.defaultLayer,
+    File.defaultLayer,
+    FileWatcher.defaultLayer,
+    Format.defaultLayer,
+    LSP.defaultLayer,
+    Plugin.defaultLayer,
+    Project.defaultLayer,
+    ShareNext.defaultLayer,
+    Snapshot.defaultLayer,
+    Vcs.defaultLayer,
+  ]),
+)
+
+export * as InstanceBootstrap from "./bootstrap"

@@ -1,16 +1,17 @@
 import { describe, expect, spyOn, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Global } from "../../src/global"
+import { Global } from "@opencode-ai/core/global"
 import { Permission } from "../../src/permission"
 import { Instance } from "../../src/project/instance"
+import { containsPath } from "../../src/project/instance-context"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Session, SessionPrompt } from "../../src/team/runtime"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { Team } from "../../src/team"
 import { TeamWorktree } from "../../src/team/worktree"
 import { permPath } from "../../src/tool/perm"
-import { Log } from "../../src/util"
+import * as Log from "@opencode-ai/core/util/log"
 import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
@@ -216,7 +217,7 @@ describe("team worktree", () => {
         expect(member?.mergeStatus).toBe("pending")
         expect(session.directory).toBe(member!.worktreePath!)
         expect(session.directory.startsWith(path.join(Global.Path.data, "worktrees", Instance.project.id))).toBe(true)
-        expect(Instance.containsPath(member!.worktreePath!)).toBe(true)
+        expect(containsPath(member!.worktreePath!, Instance.current)).toBe(true)
 
         loop.mockRestore()
         await Team.setMemberStatus("worktree-spawn", "worker", "shutdown")

@@ -3,21 +3,26 @@ import type { Permission } from "@/permission"
 export function childPermission(input: {
   tools: readonly string[]
   pad?: boolean
+  todo?: boolean
   task?: boolean
   primary?: string[]
   parent?: Permission.Rule[]
 }) {
   return [
-    {
-      permission: "todowrite",
-      pattern: "*",
-      action: "deny" as const,
-    },
-    {
-      permission: "todoread",
-      pattern: "*",
-      action: "deny" as const,
-    },
+    ...(input.todo
+      ? []
+      : [
+          {
+            permission: "todowrite" as const,
+            pattern: "*" as const,
+            action: "deny" as const,
+          },
+          {
+            permission: "todoread" as const,
+            pattern: "*" as const,
+            action: "deny" as const,
+          },
+        ]),
     ...input.tools.map((tool) => ({
       permission: tool,
       pattern: "*",
@@ -61,6 +66,6 @@ export function childPermission(input: {
       action: "allow" as const,
       permission: tool,
     })) ?? []),
-    ...(input.parent ?? []).filter((rule) => rule.action === "deny"),
+    ...(input.parent ?? []).filter((rule) => rule.permission === "external_directory" || rule.action === "deny"),
   ]
 }

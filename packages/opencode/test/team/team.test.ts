@@ -3,7 +3,7 @@ import { Effect } from "effect"
 import path from "path"
 import { Instance } from "../../src/project/instance"
 import { Team, TeamTasks } from "../../src/team"
-import { Log } from "../../src/util"
+import * as Log from "@opencode-ai/core/util/log"
 import {
   TeamCreateTool,
   TeamSpawnTool,

@@ -26,7 +26,7 @@ import * as ProjectNs from "../project/project"
 import * as MessageV2Ns from "../session/message-v2"
 import { MessageID, PartID, type SessionID } from "../session/schema"
 import { lazy } from "@/util/lazy"
-import { Log } from "@/util"
+import * as Log from "@opencode-ai/core/util/log"
 
 const log = Log.create({ service: "team.runtime" })
 
@@ -79,8 +79,7 @@ export const Session = {
    */
   createNext: (input: { parentID?: SessionID; directory: string; title?: string; permission?: any }) =>
     sessionRt().runPromise((s) => s.createNext(input)),
-  // Sync generator — re-export as-is; uses Database.use which doesn't need a runtime.
-  list: SessionNs.list,
+  list: (input?: SessionNs.ListInput) => sessionRt().runPromise((s) => s.list(input)),
 }
 
 // ---------------------------------------------------------------------------

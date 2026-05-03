@@ -1,77 +1,22 @@
-import { GlobalBus } from "@/bus/global"
-import { disposeInstance } from "@/effect/instance-registry"
-import { makeRuntime } from "@/effect/run-service"
-import { AppFileSystem } from "@opencode-ai/shared/filesystem"
-import { iife } from "@/util/iife"
-import { Log } from "@/util"
-import { LocalContext } from "../util"
-import * as Project from "./project"
-import { WorkspaceContext } from "@/control-plane/workspace-context"
+import { Effect } from "effect"
+import { context, type InstanceContext } from "./instance-context"
+import { InstanceStore } from "./instance-store"
 
-export interface InstanceContext {
-  directory: string
-  worktree: string
-  project: Project.Info
-}
-
-const context = LocalContext.create<InstanceContext>("instance")
-const cache = new Map<string, Promise<InstanceContext>>()
-const project = makeRuntime(Project.Service, Project.defaultLayer)
-
-const disposal = {
-  all: undefined as Promise<void> | undefined,
-}
-
-function boot(input: { directory: string; init?: () => Promise<any>; worktree?: string; project?: Project.Info }) {
-  return iife(async () => {
-    const ctx =
-      input.project && input.worktree
-        ? {
-            directory: input.directory,
-            worktree: input.worktree,
-            project: input.project,
-          }
-        : await project
-            .runPromise((svc) => svc.fromDirectory(input.directory))
-            .then(({ project, sandbox }) => ({
-              directory: input.directory,
-              worktree: sandbox,
-              project,
-            }))
-    await context.provide(ctx, async () => {
-      await input.init?.()
-    })
-    return ctx
-  })
-}
-
-function track(directory: string, next: Promise<InstanceContext>) {
-  const task = next.catch((error) => {
-    if (cache.get(directory) === task) cache.delete(directory)
-    throw error
-  })
-  cache.set(directory, task)
-  return task
-}
+export type { InstanceContext } from "./instance-context"
+export type { LoadInput } from "./instance-store"
 
 export const Instance = {
-  async provide<R>(input: { directory: string; init?: () => Promise<any>; fn: () => R }): Promise<R> {
-    const directory = AppFileSystem.resolve(input.directory)
-    let existing = cache.get(directory)
-    if (!existing) {
-      Log.Default.info("creating instance", { directory })
-      existing = track(
-        directory,
-        boot({
-          directory,
-          init: input.init,
-        }),
-      )
-    }
-    const ctx = await existing
-    return context.provide(ctx, async () => {
-      return input.fn()
-    })
+  async provide<R>(input: {
+    directory: string
+    init?: Effect.Effect<void> | (() => Promise<unknown> | unknown)
+    fn: () => R
+  }): Promise<R> {
+    const initInput = input.init
+    const init = typeof initInput === "function" ? Effect.promise(() => Promise.resolve(initInput())).pipe(Effect.asVoid) : initInput
+    const ctx = await InstanceStore.runtime.runPromise((store) =>
+      store.load({ directory: input.directory, init }),
+    )
+    return context.provide(ctx, async () => input.fn())
   },
   get current() {
     return context.use()
@@ -86,23 +31,6 @@ export const Instance = {
     return context.use().project
   },
 
-  /**
-   * Check if a path is within the project boundary.
-   * Returns true if path is inside Instance.directory, Instance.worktree, or a registered sandbox.
-   * Paths within the repo, sibling worktrees, or managed sandboxes should not trigger external_directory permission.
-   */
-  containsPath(filepath: string, ctx?: InstanceContext) {
-    const instance = ctx ?? Instance
-    if (AppFileSystem.contains(instance.directory, filepath)) return true
-    // Non-git projects set worktree to "/" which would match ANY absolute path.
-    // Skip worktree check in this case to preserve external_directory permissions.
-    if (instance.worktree !== "/" && AppFileSystem.contains(instance.worktree, filepath)) return true
-    // Sandboxes are sibling worktrees / managed directories registered by the
-    // project (e.g. team worktrees). Check them so writes there don't trigger
-    // external_directory prompts.
-    const sandboxes = instance.project.sandboxes ?? []
-    return sandboxes.some((dir) => AppFileSystem.contains(dir, filepath))
-  },
   /**
    * Captures the current instance ALS context and returns a wrapper that
    * restores it when called. Use this for callbacks that fire outside the
@@ -119,76 +47,5 @@ export const Instance = {
    */
   restore<R>(ctx: InstanceContext, fn: () => R): R {
     return context.provide(ctx, fn)
-  },
-  async reload(input: { directory: string; init?: () => Promise<any>; project?: Project.Info; worktree?: string }) {
-    const directory = AppFileSystem.resolve(input.directory)
-    Log.Default.info("reloading instance", { directory })
-    await disposeInstance(directory)
-    cache.delete(directory)
-    const next = track(directory, boot({ ...input, directory }))
-
-    GlobalBus.emit("event", {
-      directory,
-      project: input.project?.id,
-      workspace: WorkspaceContext.workspaceID,
-      payload: {
-        type: "server.instance.disposed",
-        properties: {
-          directory,
-        },
-      },
-    })
-
-    return await next
-  },
-  async dispose() {
-    const directory = Instance.directory
-    const project = Instance.project
-    Log.Default.info("disposing instance", { directory })
-    await disposeInstance(directory)
-    cache.delete(directory)
-
-    GlobalBus.emit("event", {
-      directory,
-      project: project.id,
-      workspace: WorkspaceContext.workspaceID,
-      payload: {
-        type: "server.instance.disposed",
-        properties: {
-          directory,
-        },
-      },
-    })
-  },
-  async disposeAll() {
-    if (disposal.all) return disposal.all
-
-    disposal.all = iife(async () => {
-      Log.Default.info("disposing all instances")
-      const entries = [...cache.entries()]
-      for (const [key, value] of entries) {
-        if (cache.get(key) !== value) continue
-
-        const ctx = await value.catch((error) => {
-          Log.Default.warn("instance dispose failed", { key, error })
-          return undefined
-        })
-
-        if (!ctx) {
-          if (cache.get(key) === value) cache.delete(key)
-          continue
-        }
-
-        if (cache.get(key) !== value) continue
-
-        await context.provide(ctx, async () => {
-          await Instance.dispose()
-        })
-      }
-    }).finally(() => {
-      disposal.all = undefined
-    })
-
-    return disposal.all
   },
 }

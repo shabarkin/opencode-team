@@ -1,4 +1,4 @@
-import { Log } from "../util"
+import * as Log from "@opencode-ai/core/util/log"
 import { Bus } from "../bus"
 import { MessageV2 } from "../session/message-v2"
 import { SessionPrompt, SessionStatus } from "./runtime"

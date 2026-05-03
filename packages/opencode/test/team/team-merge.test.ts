@@ -5,7 +5,7 @@ import { Instance } from "../../src/project/instance"
 import { Session } from "../../src/team/runtime"
 import { Team } from "../../src/team"
 import { TeamWorktree } from "../../src/team/worktree"
-import { Log } from "../../src/util"
+import * as Log from "@opencode-ai/core/util/log"
 import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })

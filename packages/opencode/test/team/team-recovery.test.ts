@@ -5,7 +5,7 @@ import { Instance } from "../../src/project/instance"
 import { Team } from "../../src/team"
 import { Session } from "../../src/team/runtime"
 import { Inbox } from "../../src/team/inbox"
-import { Log } from "../../src/util"
+import * as Log from "@opencode-ai/core/util/log"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { ProviderID, ModelID } from "../../src/provider/schema"
 

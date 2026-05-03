@@ -1,10 +1,10 @@
 import z from "zod"
 import path from "path"
-import { Log } from "../util"
+import * as Log from "@opencode-ai/core/util/log"
 import { Bus } from "../bus"
 import { Instance } from "../project/instance"
 import { Storage } from "./runtime"
-import { Lock } from "../util"
+import * as Lock from "../util/lock"
 import { fn } from "../util/fn"
 import {
   TeamEvent,
@@ -2382,7 +2382,7 @@ export namespace Team {
     const known = new Set(
       (await list()).flatMap((team) => [team.leadSessionID, ...team.members.map((member) => member.sessionID)]),
     )
-    for (const session of Session.list({ limit: 10_000 })) {
+    for (const session of await Session.list({ limit: 10_000 })) {
       if (known.has(session.id)) continue
       if (!session.parentID) continue
       if (!session.title.includes(" teammate")) continue
@@ -2438,7 +2438,7 @@ export namespace Team {
         updated: Date.now(),
         prompt: meta.prompt,
         model: meta.model,
-        planApproval: session.permission?.some((rule) => rule.pattern === "*:plan-approval") ? "pending" : "none",
+        planApproval: session.permission?.some((rule: Rule) => rule.pattern === "*:plan-approval") ? "pending" : "none",
         checkpoint: "none",
         activeDelegations: 0,
       }).catch((err: unknown) => {
