@@ -135,6 +135,18 @@ describe("session team routes", () => {
         expect(url.status).toBe(200)
         expect(steer).toHaveBeenCalledWith(session.id, "follow the url path")
 
+        const urlString = await SessionRoutes().request(`http://localhost/${session.id}/steer`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": session.id,
+          },
+          body: JSON.stringify({ text: "follow the url string path" }),
+        })
+
+        expect(urlString.status).toBe(200)
+        expect(steer).toHaveBeenCalledWith(session.id, "follow the url string path")
+
         steer.mockRestore()
       },
     })

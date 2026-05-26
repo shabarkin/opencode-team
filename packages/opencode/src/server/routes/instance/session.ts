@@ -35,7 +35,9 @@ function normalize(url: URL) {
 
 function routeInput(input: string | URL) {
   if (input instanceof URL) return normalize(new URL(input))
-  return `/session${input.toString()}`
+  const url = input.toString()
+  if (URL.canParse(url)) return normalize(new URL(url))
+  return `/session${url}`
 }
 
 export const SessionRoutes = () => ({

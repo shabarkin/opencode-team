@@ -105,6 +105,15 @@ describe("team routes", () => {
 
         expect(url.status).toBe(200)
         expect((await url.json()).name).toBe("request-team")
+
+        const urlString = await TeamRoutes().request("http://localhost/request-team", {
+          headers: {
+            "x-opencode-session": lead,
+          },
+        })
+
+        expect(urlString.status).toBe(200)
+        expect((await urlString.json()).name).toBe("request-team")
       },
     })
   })
