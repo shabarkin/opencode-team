@@ -1,6 +1,6 @@
 import { Effect } from "effect"
 import { context, type InstanceContext } from "./instance-context"
-import { InstanceStore } from "./instance-store"
+import { InstanceRuntime } from "./instance-runtime"
 
 export type { InstanceContext } from "./instance-context"
 export type { LoadInput } from "./instance-store"
@@ -8,15 +8,18 @@ export type { LoadInput } from "./instance-store"
 export const Instance = {
   async provide<R>(input: {
     directory: string
-    init?: Effect.Effect<void> | (() => Promise<unknown> | unknown)
+    init?: Effect.Effect<void> | ((directory: string) => Promise<unknown> | unknown)
     fn: () => R
-  }): Promise<R> {
-    const initInput = input.init
-    const init = typeof initInput === "function" ? Effect.promise(() => Promise.resolve(initInput())).pipe(Effect.asVoid) : initInput
-    const ctx = await InstanceStore.runtime.runPromise((store) =>
-      store.load({ directory: input.directory, init }),
-    )
-    return context.provide(ctx, async () => input.fn())
+  }): Promise<Awaited<R>> {
+    const ctx = await InstanceRuntime.load({ directory: input.directory })
+    return (await context.provide(ctx, async () => {
+      if (typeof input.init === "function") await input.init(ctx.directory)
+      if (input.init && typeof input.init !== "function") {
+        const { AppRuntime } = await import("@/effect/app-runtime")
+        await AppRuntime.runPromise(input.init)
+      }
+      return (await input.fn()) as Awaited<R>
+    })) as Awaited<R>
   },
   get current() {
     return context.use()

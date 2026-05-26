@@ -5,7 +5,6 @@ import { useTheme } from "../context/theme"
 import { useSync } from "../context/sync"
 import { useRouteData } from "../context/route"
 import { useRoute } from "../context/route"
-import { useToast } from "../ui/toast"
 import { teamStatusIcon } from "@/team/status-view"
 
 type Value = { type: "member"; sessionID?: string } | { type: "task"; id: string } | { type: "request"; id: string }
@@ -43,7 +42,6 @@ export function DialogTeam() {
   const sync = useSync()
   const route = useRouteData("session")
   const nav = useRoute()
-  const toast = useToast()
 
   const teamInfo = createMemo(() => sync.data.team[route.sessionID])
 
@@ -57,12 +55,25 @@ export function DialogTeam() {
     const info = teamInfo()
     if (!info) return []
 
+    const leadOption: DialogSelectOption<Value>[] =
+      info.role === "member" && info.leadSessionID
+        ? [
+            {
+              title: "Lead",
+              value: { type: "member", sessionID: info.leadSessionID },
+              category: "Navigation",
+              footer: "Return to team lead",
+              gutter: () => <text fg={theme.primary}>{"<"}</text>,
+            },
+          ]
+        : []
+
     const memberOptions: DialogSelectOption<Value>[] = info.members.map((m) => ({
       title: `${m.name} (@${m.agent})`,
       value: { type: "member", sessionID: m.sessionID },
       category: "Teammates",
       footer: `Status: ${m.status}`,
-      gutter: <text fg={statusColor(m.status, theme)}>{teamStatusIcon(m.status)}</text>,
+      gutter: () => <text fg={statusColor(m.status, theme)}>{teamStatusIcon(m.status)}</text>,
       disabled: !m.sessionID,
     }))
 
@@ -77,7 +88,7 @@ export function DialogTeam() {
       ]
         .filter(Boolean)
         .join(" | "),
-      gutter: <text fg={statusColor(t.status, theme)}>{teamStatusIcon(t.status)}</text>,
+      gutter: () => <text fg={statusColor(t.status, theme)}>{teamStatusIcon(t.status)}</text>,
       disabled: t.status === "completed" || t.status === "cancelled",
     }))
 
@@ -86,10 +97,10 @@ export function DialogTeam() {
       value: { type: "request", id: request.id },
       category: "Pending Spawn Requests",
       footer: request.rationale,
-      gutter: <text fg={theme.warning}>?</text>,
+      gutter: () => <text fg={theme.warning}>?</text>,
     }))
 
-    return [...memberOptions, ...taskOptions, ...spawnOptions]
+    return [...leadOption, ...memberOptions, ...taskOptions, ...spawnOptions]
   })
 
   const handleSelect = (option: DialogSelectOption<Value>) => {
@@ -119,27 +130,6 @@ export function DialogTeam() {
         title={`Team: ${teamInfo()!.teamName} (${teamInfo()!.role})`}
         options={options()}
         onSelect={handleSelect}
-        keybind={[
-          {
-            keybind: { name: "m", ctrl: false, meta: false, shift: false, leader: false },
-            title: "message",
-            onTrigger: (option) => {
-              if (option.value.type === "member") {
-                toast.show({ message: "Use team_message tool from the prompt to message teammates", variant: "info" })
-              }
-            },
-          },
-          {
-            keybind: { name: "l", ctrl: false, meta: false, shift: false, leader: false },
-            title: "go to lead",
-            onTrigger: () => {
-              const info = teamInfo()
-              if (!info?.leadSessionID) return
-              dialog.clear()
-              nav.navigate({ type: "session", sessionID: info.leadSessionID })
-            },
-          },
-        ]}
       />
     </Show>
   )

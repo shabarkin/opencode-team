@@ -1,6 +1,5 @@
 import { BusEvent } from "@/bus/bus-event"
-import { Bus } from "@/bus"
-import { SessionID } from "@/session/schema"
+import { serviceUse } from "@/effect/service-use"
 import { InstanceState } from "@/effect/instance-state"
 
 import { AppFileSystem } from "@opencode-ai/core/filesystem"
@@ -16,17 +15,15 @@ import { containsPath } from "../project/instance-context"
 import * as Log from "@opencode-ai/core/util/log"
 import { Protected } from "./protected"
 import { Ripgrep } from "./ripgrep"
-import { zod } from "@/util/effect-zod"
-import { NonNegativeInt, type DeepMutable, withStatics } from "@/util/schema"
+import { NonNegativeInt, type DeepMutable } from "@opencode-ai/core/schema"
+import { SessionID } from "@/session/schema"
 
 export const Info = Schema.Struct({
   path: Schema.String,
   added: NonNegativeInt,
   removed: NonNegativeInt,
   status: Schema.Literals(["added", "deleted", "modified"]),
-})
-  .annotate({ identifier: "File" })
-  .pipe(withStatics((s) => ({ zod: zod(s) })))
+}).annotate({ identifier: "File" })
 export type Info = DeepMutable<Schema.Schema.Type<typeof Info>>
 
 export const Node = Schema.Struct({
@@ -35,9 +32,7 @@ export const Node = Schema.Struct({
   absolute: Schema.String,
   type: Schema.Literals(["file", "directory"]),
   ignored: Schema.Boolean,
-})
-  .annotate({ identifier: "FileNode" })
-  .pipe(withStatics((s) => ({ zod: zod(s) })))
+}).annotate({ identifier: "FileNode" })
 export type Node = DeepMutable<Schema.Schema.Type<typeof Node>>
 
 const Hunk = Schema.Struct({
@@ -64,9 +59,7 @@ export const Content = Schema.Struct({
   patch: Schema.optional(Patch),
   encoding: Schema.optional(Schema.Literal("base64")),
   mimeType: Schema.optional(Schema.String),
-})
-  .annotate({ identifier: "FileContent" })
-  .pipe(withStatics((s) => ({ zod: zod(s) })))
+}).annotate({ identifier: "FileContent" })
 export type Content = DeepMutable<Schema.Schema.Type<typeof Content>>
 
 export const Event = {
@@ -78,18 +71,6 @@ export const Event = {
     }),
   ),
 }
-
-export const edited = (input: { file: string | string[]; sessionID: SessionID }) =>
-  Effect.gen(function* () {
-    const bus = yield* Bus.Service
-    const files = Array.isArray(input.file) ? input.file : [input.file]
-    for (const file of files) {
-      yield* bus.publish(Event.Edited, {
-        file,
-        sessionID: input.sessionID,
-      })
-    }
-  })
 
 const log = Log.create({ service: "file" })
 
@@ -347,6 +328,8 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/File") {}
+
+export const use = serviceUse(Service)
 
 export const layer = Layer.effect(
   Service,

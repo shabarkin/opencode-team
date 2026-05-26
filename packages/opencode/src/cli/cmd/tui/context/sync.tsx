@@ -30,10 +30,11 @@ import { useArgs } from "./args"
 import { batch, onMount } from "solid-js"
 import * as Log from "@opencode-ai/core/util/log"
 import { emptyConsoleState, type ConsoleState } from "@/config/console-state"
-import { loadTeamSession, type TeamSessionState } from "@/team/session-payload"
-import { targets } from "./team-sync"
 import path from "path"
 import { useKV } from "./kv"
+import { aggregateFailures } from "./aggregate-failures"
+import { loadTeamSession, type TeamSessionState } from "@/team/session-payload"
+import { targets } from "./team-sync"
 
 export const { use: useSync, provider: SyncProvider } = createSimpleContext({
   name: "Sync",
@@ -159,7 +160,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         .then((x) => (x.data ?? []).toSorted((a, b) => a.id.localeCompare(b.id)))
     }
 
-    event.subscribe((event) => {
+    event.subscribe((event, { workspace }) => {
       switch (event.type) {
         case "server.instance.disposed":
           void bootstrap()
@@ -381,7 +382,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         case "message.part.removed": {
           const parts = store.part[event.properties.messageID]
           const result = Binary.search(parts, event.properties.partID, (p) => p.id)
-          if (result.found)
+          if (result.found) {
             setStore(
               "part",
               event.properties.messageID,
@@ -389,6 +390,7 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 draft.splice(result.index, 1)
               }),
             )
+          }
           break
         }
 
@@ -399,12 +401,13 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         }
 
         case "vcs.branch.updated": {
-          setStore("vcs", { branch: event.properties.branch })
+          if (workspace === project.workspace.current()) {
+            setStore("vcs", { branch: event.properties.branch })
+          }
           break
         }
       }
 
-      // Team events — payloads are SSE-redacted, so refetch open session team state.
       const raw = event as { type?: string; properties?: { teamName?: string } }
       if (typeof raw.type === "string" && raw.type.startsWith("team.")) {
         const teamName = typeof raw.properties?.teamName === "string" ? raw.properties.teamName : undefined
@@ -434,16 +437,23 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
         .catch(() => emptyConsoleState)
       const agentsPromise = sdk.client.app.agents({ workspace }, { throwOnError: true })
       const configPromise = sdk.client.config.get({ workspace }, { throwOnError: true })
-      const blockingRequests: Promise<unknown>[] = [
-        providersPromise,
-        providerListPromise,
-        agentsPromise,
-        configPromise,
-        projectPromise,
-        ...(args.continue ? [sessionListPromise] : []),
+      const blockingRequests: { name: string; promise: Promise<unknown> }[] = [
+        { name: "config.providers", promise: providersPromise },
+        { name: "provider.list", promise: providerListPromise },
+        { name: "app.agents", promise: agentsPromise },
+        { name: "config.get", promise: configPromise },
+        { name: "project.sync", promise: projectPromise },
+        ...(args.continue ? [{ name: "session.list", promise: sessionListPromise }] : []),
       ]
 
-      await Promise.all(blockingRequests)
+      await Promise.allSettled(blockingRequests.map((r) => r.promise))
+        .then((settled) => {
+          // Surface every failed endpoint in one labeled message instead of
+          // letting the first rejection drown its siblings as unhandled
+          // rejections.
+          const failure = aggregateFailures(blockingRequests.map((r, i) => ({ name: r.name, result: settled[i] })))
+          if (failure) throw failure
+        })
         .then(async () => {
           const providersResponse = providersPromise.then((x) => x.data!)
           const providerListResponse = providerListPromise.then((x) => x.data!)
@@ -569,10 +579,12 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
               if (match.found) draft.session[match.index] = session.data!
               if (!match.found) draft.session.splice(match.index, 0, session.data!)
               draft.todo[sessionID] = todo.data ?? []
-              draft.message[sessionID] = messages.data!.map((x) => x.info)
-              for (const message of messages.data!) {
+              const infos: (typeof draft.message)[string] = []
+              for (const message of messages.data ?? []) {
+                infos.push(message.info)
                 draft.part[message.info.id] = message.parts
               }
+              draft.message[sessionID] = infos
               draft.session_diff[sessionID] = diff.data ?? []
             }),
           )

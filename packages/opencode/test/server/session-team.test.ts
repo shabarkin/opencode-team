@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import { Instance } from "../../src/project/instance"
 import { SessionRoutes } from "../../src/server/routes/instance/session"
 import { Session, SessionPrompt } from "../../src/team/runtime"
@@ -10,6 +10,17 @@ import * as Log from "@opencode-ai/core/util/log"
 import { tmpdir } from "../fixture/fixture"
 
 Log.init({ print: false })
+
+const flag = process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+
+beforeEach(() => {
+  process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+})
+
+afterEach(() => {
+  if (flag === undefined) delete process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+  if (flag !== undefined) process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = flag
+})
 
 async function seed(sessionID: SessionID, text = "seed") {
   const id = MessageID.ascending()
@@ -83,6 +94,46 @@ describe("session team routes", () => {
 
         expect(res.status).toBe(403)
         expect(steer).not.toHaveBeenCalled()
+
+        steer.mockRestore()
+      },
+    })
+  })
+
+  test("request object and URL inputs preserve legacy session route prefix", async () => {
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = await Session.create({})
+        const steer = spyOn(SessionPrompt, "steer").mockResolvedValue(undefined)
+
+        const res = await SessionRoutes().request(
+          new Request(`http://localhost/${session.id}/steer`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-opencode-session": session.id,
+            },
+            body: JSON.stringify({ text: "follow the request object path" }),
+          }),
+        )
+
+        expect(res.status).toBe(200)
+        expect(steer).toHaveBeenCalledWith(session.id, "follow the request object path")
+
+        const url = await SessionRoutes().request(new URL(`http://localhost/${session.id}/steer`), {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-opencode-session": session.id,
+          },
+          body: JSON.stringify({ text: "follow the url path" }),
+        })
+
+        expect(url.status).toBe(200)
+        expect(steer).toHaveBeenCalledWith(session.id, "follow the url path")
 
         steer.mockRestore()
       },
@@ -170,6 +221,54 @@ describe("session team routes", () => {
     })
   })
 
+  test("raw server abort restores team context from directory header", async () => {
+    await using tmp = await tmpdir()
+
+    const ids = await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const lead = (await Session.create({})).id
+        const member = (await Session.create({ parentID: lead })).id
+        await Team.create({ name: "raw-abort-team", leadSessionID: lead })
+        await Team.addMember("raw-abort-team", {
+          name: "worker-a",
+          sessionID: member,
+          agent: "general",
+          status: "busy",
+          execution_status: "running",
+        })
+        return { lead }
+      },
+    })
+
+    const denied = await SessionRoutes().request(new URL(`http://localhost/${ids.lead}/abort`), {
+      method: "POST",
+      headers: {
+        "x-opencode-directory": tmp.path,
+      },
+    })
+
+    expect(denied.status).toBe(403)
+
+    const res = await SessionRoutes().request(new URL(`http://localhost/${ids.lead}/abort`), {
+      method: "POST",
+      headers: {
+        "x-opencode-directory": tmp.path,
+        "x-opencode-session": ids.lead,
+      },
+    })
+
+    expect(res.status).toBe(200)
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const team = await Team.get("raw-abort-team")
+        expect(team?.members[0].execution_status).toBe("cancelling")
+      },
+    })
+  })
+
   test("team-message requires a matching caller session", async () => {
     await using tmp = await tmpdir()
 
@@ -204,6 +303,25 @@ describe("session team routes", () => {
     })
   })
 
+  test("abort keeps legacy behavior for non-team sessions", async () => {
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const session = (await Session.create({})).id
+
+        const app = SessionRoutes()
+        const res = await app.request(`/${session}/abort`, {
+          method: "POST",
+        })
+
+        expect(res.status).toBe(200)
+        expect(await res.json()).toBe(true)
+      },
+    })
+  })
+
   test("abort requires a matching caller session", async () => {
     await using tmp = await tmpdir()
 
@@ -212,6 +330,7 @@ describe("session team routes", () => {
       fn: async () => {
         const lead = (await Session.create({})).id
         const other = (await Session.create({})).id
+        await Team.create({ name: "abort-auth-team", leadSessionID: lead })
 
         const app = SessionRoutes()
         const res = await app.request(`/${lead}/abort`, {
@@ -233,6 +352,7 @@ describe("session team routes", () => {
       directory: tmp.path,
       fn: async () => {
         const lead = (await Session.create({})).id
+        await Team.create({ name: "abort-missing-auth-team", leadSessionID: lead })
 
         const app = SessionRoutes()
         const res = await app.request(`/${lead}/abort`, {

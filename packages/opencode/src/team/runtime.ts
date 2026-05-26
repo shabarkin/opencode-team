@@ -120,7 +120,7 @@ function injectEffect(input: {
     let user: MessageV2Ns.User | undefined
     let before: string | undefined
     for (let i = 0; i < 10 && !user; i++) {
-      const pageItems = MessageV2Ns.page({ sessionID: input.sessionID, limit: 50, before }).items
+      const pageItems = (yield* MessageV2Ns.page({ sessionID: input.sessionID, limit: 50, before })).items
       const found = pageItems.findLast((item) => item.info.role === "user")
       if (found && found.info.role === "user") {
         user = found.info as MessageV2Ns.User

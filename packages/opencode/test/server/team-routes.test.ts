@@ -76,6 +76,39 @@ describe("team routes", () => {
     })
   })
 
+  test("request object and URL inputs preserve legacy team route prefix", async () => {
+    process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+    await using tmp = await tmpdir()
+
+    await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const lead = (await Session.create({})).id
+        await Team.create({ name: "request-team", leadSessionID: lead })
+
+        const res = await TeamRoutes().request(
+          new Request("http://localhost/request-team", {
+            headers: {
+              "x-opencode-session": lead,
+            },
+          }),
+        )
+
+        expect(res.status).toBe(200)
+        expect((await res.json()).name).toBe("request-team")
+
+        const url = await TeamRoutes().request(new URL("http://localhost/request-team"), {
+          headers: {
+            "x-opencode-session": lead,
+          },
+        })
+
+        expect(url.status).toBe(200)
+        expect((await url.json()).name).toBe("request-team")
+      },
+    })
+  })
+
   test("by-session route requires matching caller and redacts teammate session ids for members", async () => {
     process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
     await using tmp = await tmpdir()
@@ -150,6 +183,30 @@ describe("team routes", () => {
         expect(leadBody.team.pending_spawn_requests[0].prompt).toBe("inspect hidden files")
       },
     })
+  })
+
+  test("raw server team routes restore instance context from directory header", async () => {
+    process.env.OPENCODE_EXPERIMENTAL_AGENT_TEAMS = "1"
+    await using tmp = await tmpdir()
+
+    const ids = await Instance.provide({
+      directory: tmp.path,
+      fn: async () => {
+        const lead = (await Session.create({})).id
+        await Team.create({ name: "raw-server-team", leadSessionID: lead })
+        return { lead }
+      },
+    })
+
+    const res = await Server.Default().app.request(`/team/by-session/${ids.lead}`, {
+      headers: {
+        "x-opencode-directory": tmp.path,
+        "x-opencode-session": ids.lead,
+      },
+    })
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).team.name).toBe("raw-server-team")
   })
 
   test("steer route rejects non-leads and accepts the lead", async () => {

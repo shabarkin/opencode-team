@@ -6,76 +6,76 @@ import { Snapshot } from "../snapshot"
 import * as Project from "./project"
 import * as Vcs from "./vcs"
 import { Bus } from "../bus"
-import { Command } from "../command"
 import { InstanceState } from "@/effect/instance-state"
 import { FileWatcher } from "@/file/watcher"
 import { ShareNext } from "@/share/share-next"
-import { Context, Effect, Layer } from "effect"
+import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
+import { Service } from "./bootstrap-service"
+import { Reference } from "@/reference/reference"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { Instance } from "./instance"
 import * as Log from "@opencode-ai/core/util/log"
 
-export interface Interface {
-  readonly run: Effect.Effect<void>
-}
+const log = Log.create({ service: "team.bootstrap" })
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/InstanceBootstrap") {}
+export { Service } from "./bootstrap-service"
+export type { Interface } from "./bootstrap-service"
 
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     // Yield each bootstrap dep at layer init so `run` itself has R = never.
-    // This breaks the circular declaration loop through Config → Instance → InstanceStore
-    // (instance-store.ts only yields this Service tag, never the impl-side services).
-    const bus = yield* Bus.Service
+    // InstanceStore imports only the lightweight tag from bootstrap-service.ts,
+    // so it can depend on bootstrap without importing this implementation graph.
     const config = yield* Config.Service
     const file = yield* File.Service
     const fileWatcher = yield* FileWatcher.Service
     const format = yield* Format.Service
     const lsp = yield* LSP.Service
     const plugin = yield* Plugin.Service
+    const project = yield* Project.Service
+    const reference = yield* Reference.Service
     const shareNext = yield* ShareNext.Service
     const snapshot = yield* Snapshot.Service
     const vcs = yield* Vcs.Service
 
     const run = Effect.gen(function* () {
       const ctx = yield* InstanceState.context
-      yield* Effect.logInfo("bootstrapping", { directory: ctx.directory })
+      yield* Effect.logInfo("bootstrapping").pipe(Effect.annotateLogs("directory", ctx.directory))
       // everything depends on config so eager load it for nice traces
       yield* config.get()
       // Plugin can mutate config so it has to be initialized before anything else.
       yield* plugin.init()
-      yield* Effect.all(
-        [lsp, shareNext, format, file, fileWatcher, vcs, snapshot].map((s) => Effect.forkDetach(s.init())),
+      // Each service self-manages its own slow work via Effect.forkScoped against
+      // its per-instance state scope. We just await materialization here.
+      yield* Effect.forEach(
+        [reference, lsp, shareNext, format, file, fileWatcher, vcs, snapshot, project],
+        (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
+        { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
 
-      const projectID = ctx.project.id
-      yield* bus.subscribeCallback(Command.Event.Executed, async (payload) => {
-        if (payload.properties.name === Command.Default.INIT) {
-          Project.setInitialized(projectID)
-        }
-      })
-
       if (Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS) {
-        const restore = <T>(fn: () => T) => Instance.restore(ctx, fn)
-        void import("../team").then(({ Team }) =>
-          restore(() => {
-            Team.onCleanedRestorePermissions()
-            void Team.recover()
-              .catch((err) => {
-                Log.Default.warn("team recovery failed", { error: err instanceof Error ? err.message : err })
-              })
-              .finally(() =>
-                restore(() => {
-                  Team.trackResults()
-                  Team.autoCleanup()
-                  Team.checkpoints()
-                }),
-              )
-            void import("../team/files").then(({ initFileTracking }) => restore(() => initFileTracking()))
-          }),
-        )
+        yield* Effect.sync(() => {
+          const restore = <T>(fn: () => T) => Instance.restore(ctx, fn)
+          void import("../team").then(({ Team }) =>
+            restore(() => {
+              Team.onCleanedRestorePermissions()
+              void Team.recover()
+                .catch((err) => {
+                  log.warn("team recovery failed", { error: err instanceof Error ? err.message : err })
+                })
+                .finally(() =>
+                  restore(() => {
+                    Team.trackResults()
+                    Team.autoCleanup()
+                    Team.checkpoints()
+                  }),
+                )
+              void import("../team/files").then(({ initFileTracking }) => restore(() => initFileTracking()))
+            }),
+          )
+        })
       }
     }).pipe(Effect.withSpan("InstanceBootstrap"))
 
@@ -93,6 +93,7 @@ export const defaultLayer: Layer.Layer<Service> = layer.pipe(
     LSP.defaultLayer,
     Plugin.defaultLayer,
     Project.defaultLayer,
+    Reference.defaultLayer,
     ShareNext.defaultLayer,
     Snapshot.defaultLayer,
     Vcs.defaultLayer,

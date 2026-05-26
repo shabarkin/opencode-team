@@ -1,11 +1,10 @@
 import { Effect, Fiber, Layer, ManagedRuntime } from "effect"
 import * as Context from "effect/Context"
-import { Instance } from "@/project/instance"
-import { LocalContext } from "@/util/local-context"
 import { InstanceRef, WorkspaceRef } from "./instance-ref"
 import * as Observability from "@opencode-ai/core/effect/observability"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
-import type { InstanceContext } from "@/project/instance"
+import type { InstanceContext } from "@/project/instance-context"
+import { context as instanceContext } from "@/project/instance-context"
 import { memoMap } from "@opencode-ai/core/effect/memo-map"
 
 type Refs = {
@@ -25,19 +24,20 @@ export function attachWith<A, E, R>(effect: Effect.Effect<A, E, R>, refs: Refs):
 
 export function attach<A, E, R>(effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> {
   const workspace = WorkspaceContext.workspaceID
-  const instance = (() => {
-    try {
-      return Instance.current
-    } catch (err) {
-      if (!(err instanceof LocalContext.NotFound)) throw err
-    }
-  })()
-  if (instance && workspace !== undefined) return attachWith(effect, { instance, workspace })
   const fiber = Fiber.getCurrent()
+  const instance = fiber ? Context.getReferenceUnsafe(fiber.context, InstanceRef) : undefined
   return attachWith(effect, {
-    instance: instance ?? (fiber ? Context.getReferenceUnsafe(fiber.context, InstanceRef) : undefined),
+    instance: instance ?? localInstance(),
     workspace: workspace ?? (fiber ? Context.getReferenceUnsafe(fiber.context, WorkspaceRef) : undefined),
   })
+}
+
+function localInstance() {
+  try {
+    return instanceContext.use()
+  } catch {
+    return undefined
+  }
 }
 
 export function makeRuntime<I, S, E>(service: Context.Service<I, S>, layer: Layer.Layer<I, E>) {

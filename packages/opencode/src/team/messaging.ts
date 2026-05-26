@@ -1,4 +1,5 @@
 import * as Log from "@opencode-ai/core/util/log"
+import { Effect } from "effect"
 import { Bus } from "../bus"
 import { MessageV2 } from "../session/message-v2"
 import { SessionPrompt, SessionStatus } from "./runtime"
@@ -359,7 +360,7 @@ export namespace TeamMessaging {
     const ids = new Set(pending.map((msg) => msg.id))
     let before: string | undefined
     while (true) {
-      const page = await MessageV2.page({ sessionID: SessionID.make(sessionID), limit: 50, before })
+      const page = await Effect.runPromise(MessageV2.page({ sessionID: SessionID.make(sessionID), limit: 50, before }))
       for (const msg of page.items) {
         for (const part of msg.parts) {
           const meta = (part as { metadata?: Record<string, unknown> }).metadata
