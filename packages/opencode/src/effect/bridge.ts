@@ -3,6 +3,8 @@ import { WorkspaceContext } from "@/control-plane/workspace-context"
 import type { WorkspaceID } from "@/control-plane/schema"
 import { InstanceRef, WorkspaceRef } from "./instance-ref"
 import { attachWith } from "./run-service"
+import { context as instanceContext } from "@/project/instance-context"
+import type { InstanceContext } from "@/project/instance-context"
 
 export interface Shape {
   readonly promise: <A, E, R>(effect: Effect.Effect<A, E, R>) => Promise<A>
@@ -16,6 +18,15 @@ function restoreWorkspace<R>(workspace: WorkspaceID | undefined, fn: () => R): R
   return fn()
 }
 
+function restoreInstance<R>(instance: InstanceContext | undefined, fn: () => R): R {
+  if (instance !== undefined) return instanceContext.provide(instance, fn)
+  return fn()
+}
+
+function restoreRefs<R>(refs: { instance?: InstanceContext; workspace?: WorkspaceID }, fn: () => R): R {
+  return restoreWorkspace(refs.workspace, () => restoreInstance(refs.instance, fn))
+}
+
 function captureSync() {
   const fiber = Fiber.getCurrent()
   const instance = fiber ? Context.getReferenceUnsafe(fiber.context, InstanceRef) : undefined
@@ -26,22 +37,12 @@ function captureSync() {
 
 export const bind = <Args extends readonly unknown[], Result>(fn: (...args: Args) => Result) => {
   const captured = captureSync()
-  return (...args: Args) =>
-    restoreWorkspace(captured.workspace, () =>
-      Effect.runSync(
-        attachWith(
-          Effect.sync(() => fn(...args)),
-          captured,
-        ),
-      ),
-    )
+  return (...args: Args) => restoreRefs(captured, () => Effect.runSync(attachWith(Effect.sync(() => fn(...args)), captured)))
 }
 
 /**
  * Bridge from Effect into a Promise-returning JS callback while preserving
- * `WorkspaceContext` AsyncLocalStorage for callback code that still reads it.
- * `InstanceRef` is captured for effects run through the returned bridge APIs;
- * plain JS callbacks that need it should receive the ref explicitly.
+ * legacy AsyncLocalStorage contexts for callback code that still reads them.
  *
  * Mirrors `Effect.promise` but restores workspace ALS first.
  */
@@ -62,12 +63,12 @@ export function make(): Effect.Effect<Shape> {
 
     return {
       promise: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        restoreWorkspace(workspace, () => Effect.runPromise(wrap(effect))),
+        restoreRefs({ instance, workspace }, () => Effect.runPromise(wrap(effect))),
       fork: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-        restoreWorkspace(workspace, () => Effect.runFork(wrap(effect))),
+        restoreRefs({ instance, workspace }, () => Effect.runFork(wrap(effect))),
       run: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
         Effect.callback<A, E>((resume) => {
-          restoreWorkspace(workspace, () =>
+          restoreRefs({ instance, workspace }, () =>
             Effect.runPromiseExit(wrap(effect)).then((exit) =>
               resume(Exit.isSuccess(exit) ? Effect.succeed(exit.value) : Effect.failCause(exit.cause)),
             ),
@@ -76,7 +77,7 @@ export function make(): Effect.Effect<Shape> {
       bind:
         <Args extends readonly unknown[], Result>(fn: (...args: Args) => Result) =>
         (...args: Args) =>
-          restoreWorkspace(workspace, () => Effect.runSync(wrap(Effect.sync(() => fn(...args))))),
+          restoreRefs({ instance, workspace }, () => Effect.runSync(wrap(Effect.sync(() => fn(...args))))),
     } satisfies Shape
   })
 }

@@ -1,10 +1,11 @@
-import { createMemo, Match, onCleanup, onMount, Show, Switch } from "solid-js"
+import { createMemo, createSignal, Match, onCleanup, onMount, Show, Switch } from "solid-js"
 import { useTheme } from "../../context/theme"
 import { useSync } from "../../context/sync"
 import { useDirectory } from "../../context/directory"
 import { useConnected } from "../../component/use-connected"
 import { createStore } from "solid-js/store"
 import { useRoute } from "../../context/route"
+import { useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 
 export function Footer() {
   const { theme } = useTheme()
@@ -24,6 +25,16 @@ export function Footer() {
   })
   const directory = useDirectory()
   const connected = useConnected()
+  const keymap = useOpencodeKeymap()
+  const steerShortcut = useCommandShortcut("session.steer")
+  const [hover, setHover] = createSignal(false)
+  const canSteer = createMemo(() => {
+    const data = route.data
+    if (data.type !== "session") return false
+    if (sync.data.team[data.sessionID]) return true
+    const status = sync.data.session_status?.[data.sessionID]
+    return status?.type === "busy" || status?.type === "retry"
+  })
 
   const [store, setStore] = createStore({
     welcome: false,
@@ -88,6 +99,20 @@ export function Footer() {
               </text>
             </Show>
             <text fg={theme.textMuted}>/status</text>
+            <Show when={canSteer()}>
+              <box
+                onMouseOver={() => setHover(true)}
+                onMouseOut={() => setHover(false)}
+                onMouseUp={() => keymap.dispatchCommand("session.steer")}
+                backgroundColor={hover() ? theme.backgroundElement : undefined}
+                paddingLeft={1}
+                paddingRight={1}
+              >
+                <text fg={theme.text}>
+                  Steer <span style={{ fg: theme.textMuted }}>{steerShortcut()}</span>
+                </text>
+              </box>
+            </Show>
             <Show when={teamInfo()}>
               {(info) => (
                 <text fg={theme.textMuted} wrapMode="none" flexShrink={0}>

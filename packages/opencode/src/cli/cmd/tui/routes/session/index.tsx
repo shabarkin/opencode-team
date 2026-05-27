@@ -58,9 +58,11 @@ import { TodoItem } from "../../component/todo-item"
 import { DialogMessage } from "./dialog-message"
 import type { PromptInfo } from "../../component/prompt/history"
 import { DialogConfirm } from "@tui/ui/dialog-confirm"
+import { DialogPrompt } from "../../ui/dialog-prompt"
 import { DialogTimeline } from "./dialog-timeline"
 import { DialogForkFromTimeline } from "./dialog-fork-from-timeline"
 import { DialogSessionRename } from "../../component/dialog-session-rename"
+import { DialogTeam } from "../../component/dialog-team"
 import { Sidebar } from "./sidebar"
 import { SubagentFooter } from "./subagent-footer.tsx"
 import { LANGUAGE_EXTENSIONS } from "@/lsp/language"
@@ -88,6 +90,7 @@ import { TuiPluginRuntime } from "@/cli/cmd/tui/plugin/runtime"
 import { DialogRetryAction } from "../../component/dialog-retry-action"
 import { SessionRetry } from "@/session/retry"
 import { getRevertDiffFiles } from "../../util/revert-diff"
+import { DialogTeamSteer } from "./dialog-team-steer"
 import { OPENCODE_BASE_MODE, useBindings, useCommandShortcut, useOpencodeKeymap } from "../../keymap"
 import { PathFormatterProvider, usePathFormatter } from "../../context/path-format"
 
@@ -123,6 +126,8 @@ const sessionBindingCommands = [
   "session.timeline",
   "session.fork",
   "session.compact",
+  "session.steer",
+  "session.team",
   "session.unshare",
   "session.undo",
   "session.redo",
@@ -443,6 +448,66 @@ export function Session() {
     }
   }
 
+  const canSteer = createMemo(() => {
+    if (sync.data.team[route.sessionID]) return true
+    const status = sync.data.session_status?.[route.sessionID]
+    return status?.type === "busy" || status?.type === "retry"
+  })
+
+  function steerTitle() {
+    const info = sync.data.team[route.sessionID]
+    if (info?.role === "lead") return "Steer team"
+    if (info?.role === "member" && info.memberName) return `Steer @${info.memberName}`
+    return "Steer session"
+  }
+
+  async function steerCurrent() {
+    const info = sync.data.team[route.sessionID]
+    const text = (
+      await DialogPrompt.show(dialog, steerTitle(), {
+        placeholder:
+          info?.role === "lead"
+            ? "Give all active teammates their next instruction"
+            : "Give this session its next instruction",
+      })
+    )?.trim()
+    if (!text) return
+
+    const res =
+      info?.role === "lead"
+        ? await sdk.fetch(`${sdk.url}/team/${info.teamName}/steer-all`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-opencode-session": route.sessionID,
+            },
+            body: JSON.stringify({ text }),
+          })
+        : await sdk.fetch(`${sdk.url}/session/${route.sessionID}/steer`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-opencode-session": route.sessionID,
+            },
+            body: JSON.stringify({ text }),
+          })
+
+    if (!res.ok) {
+      const next = await res.json().catch(() => undefined)
+      throw new Error(
+        next && typeof next === "object" && "error" in next && typeof next.error === "string"
+          ? next.error
+          : errorMessage(next ?? `Failed to steer ${info?.role === "lead" ? "team" : "session"}`),
+      )
+    }
+
+    toast.show({
+      message: info?.role === "lead" ? "Broadcast steering message" : "Sent steering message",
+      variant: "success",
+    })
+    dialog.clear()
+  }
+
   const sessionCommandList = createMemo(() => [
     {
       title: session()?.share?.url ? "Copy share link" : "Share session",
@@ -562,6 +627,47 @@ export function Session() {
           providerID: selectedModel.providerID,
         })
         dialog.clear()
+      },
+    },
+    {
+      title: steerTitle(),
+      value: "session.steer",
+      category: sync.data.team[route.sessionID] ? "Team" : "Session",
+      enabled: canSteer(),
+      slash: {
+        name: "steer",
+      },
+      run: async () => {
+        await steerCurrent().catch((err) => {
+          toast.show({
+            message: err instanceof Error ? err.message : "Failed to steer",
+            variant: "error",
+          })
+        })
+      },
+    },
+    {
+      title: "Show team",
+      value: "session.team",
+      category: "Team",
+      enabled: !!sync.data.team[route.sessionID],
+      slash: {
+        name: "team",
+      },
+      run: () => {
+        dialog.replace(() => <DialogTeam />)
+      },
+    },
+    {
+      title: "Team controls",
+      value: "session.team.steer",
+      category: "Team",
+      enabled: sync.data.team[route.sessionID]?.role === "lead",
+      slash: {
+        name: "team-steer",
+      },
+      run: () => {
+        dialog.replace(() => <DialogTeamSteer sessionID={route.sessionID} />)
       },
     },
     {

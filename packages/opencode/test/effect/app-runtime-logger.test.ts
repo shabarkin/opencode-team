@@ -4,6 +4,7 @@ import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { AppLayer } from "../../src/effect/app-runtime"
 import { EffectBridge } from "@/effect/bridge"
 import { InstanceRef } from "../../src/effect/instance-ref"
+import { Instance } from "../../src/project/instance"
 import * as EffectLogger from "@opencode-ai/core/effect/logger"
 import * as Observability from "@opencode-ai/core/effect/observability"
 import { attach } from "../../src/effect/run-service"
@@ -101,5 +102,21 @@ it.instance(
       expect(result.effectLogger).toBe(true)
       expect(result.defaultLogger).toBe(false)
     }).pipe(Effect.provide(Observability.layer)),
+  { git: true },
+)
+
+it.instance(
+  "EffectBridge restores legacy Instance ALS for bridged promise callbacks",
+  () =>
+    Effect.gen(function* () {
+      const test = yield* TestInstance
+      const bridge = yield* EffectBridge.make()
+
+      const directory = yield* Effect.promise(() =>
+        bridge.promise(Effect.promise(() => Promise.resolve().then(() => Instance.directory))),
+      )
+
+      expect(directory).toBe(test.directory)
+    }),
   { git: true },
 )

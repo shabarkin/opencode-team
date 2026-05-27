@@ -21,12 +21,25 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
     const abort = new AbortController()
     let sse: AbortController | undefined
 
+    const baseFetch = props.fetch ?? fetch
+    const withDirectory = Object.assign(
+      (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+        if (!props.directory) return baseFetch(input, init)
+        const headers = new Headers(init?.headers)
+        if (!headers.has("x-opencode-directory")) headers.set("x-opencode-directory", props.directory)
+        return baseFetch(input, { ...init, headers })
+      },
+      {
+        preconnect: fetch.preconnect,
+      },
+    ) as typeof fetch
+
     function createSDK() {
       return createOpencodeClient({
         baseUrl: props.url,
         signal: abort.signal,
         directory: props.directory,
-        fetch: props.fetch,
+        fetch: withDirectory,
         headers: props.headers,
       })
     }
@@ -135,7 +148,7 @@ export const { use: useSDK, provider: SDKProvider } = createSimpleContext({
       },
       directory: props.directory,
       event: emitter,
-      fetch: props.fetch ?? fetch,
+      fetch: withDirectory,
       url: props.url,
     }
   },
