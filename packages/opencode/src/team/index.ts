@@ -1949,6 +1949,8 @@ export namespace Team {
     text: string
   }): Promise<"restart" | "resume" | "message"> {
     const { TeamMessaging } = await import("./messaging")
+    const { SessionStatus } = await import("./runtime")
+    const { SessionID } = await import("../session/schema")
 
     const team = await get(input.teamName)
     if (!team) throw new Error(`Team "${input.teamName}" not found`)
@@ -1984,21 +1986,39 @@ export namespace Team {
       to: input.memberName,
       text: input.text,
     })
+    if ((await SessionStatus.get(SessionID.make(member.sessionID))).type !== "idle") {
+      if (await interrupt(input.teamName, input.memberName, true)) {
+        await TeamMessaging.wake(member.sessionID, "lead")
+      }
+    }
     return "message"
   }
 
   export async function steerAll(input: { teamName: string; text: string }) {
-    const { TeamMessaging } = await import("./messaging")
     const team = await get(input.teamName)
     if (!team) throw new Error(`Team "${input.teamName}" not found`)
-    return TeamMessaging.broadcast({
-      teamName: input.teamName,
-      from: "lead",
-      text: input.text,
-      targets: team.members
-        .filter((member) => member.status === "ready" || member.status === "busy" || member.status === "error")
-        .map((member) => member.name),
-    })
+    const targets = team.members.filter(
+      (member) => member.status === "ready" || member.status === "busy" || member.status === "error",
+    )
+    const errors = (
+      await Promise.all(
+        targets.map(async (member) => {
+          try {
+            await steer({ teamName: input.teamName, memberName: member.name, text: input.text })
+            return undefined
+          } catch (err) {
+            const message = err instanceof Error ? err.message : String(err)
+            log.warn("steer-all delivery failed", {
+              teamName: input.teamName,
+              memberName: member.name,
+              error: message,
+            })
+            return { target: member.name, error: message }
+          }
+        }),
+      )
+    ).filter((item): item is { target: string; error: string } => !!item)
+    return { targets: targets.length, delivered: targets.length - errors.length, errors }
   }
 
   /**

@@ -183,13 +183,26 @@ export const SessionPrompt = {
   }) => sessionRt().runPromise(() => injectEffect(input)),
   /**
    * Inject corrective text into a session. If the session is idle, kick the
-   * loop to wake it; otherwise let the in-progress turn pick up the inject on
-   * its next user-message read.
+   * loop to wake it. If it is busy, cancel the current turn first so a stuck
+   * tool call cannot hide the steering message behind an active runner.
    */
   steer: async (sessionID: SessionID, text: string) => {
     await SessionPrompt.inject({ sessionID, text })
     const status = await SessionStatus.get(sessionID)
-    if (status.type !== "idle") return
+    if (status.type !== "idle") {
+      await SessionPrompt.cancel(sessionID)
+      if ((await SessionStatus.get(sessionID)).type !== "idle") return
+    }
+
+    const match = await import("./index")
+      .then(({ Team }) => Team.findBySession(sessionID))
+      .catch(() => undefined)
+    if (match?.role === "member") {
+      const { TeamMessaging } = await import("./messaging")
+      await TeamMessaging.wake(sessionID, "steer")
+      return
+    }
+
     void SessionPrompt.loop({ sessionID }).catch((err) => {
       log.warn("steer wake failed", {
         sessionID,

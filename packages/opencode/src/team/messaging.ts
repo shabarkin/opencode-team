@@ -190,7 +190,7 @@ export namespace TeamMessaging {
 
     // Auto-wake: if the recipient session is idle, start its prompt loop
     // so the LLM processes the injected message.
-    if (deliverable) autoWake(targetSessionID, input.from)
+    if (deliverable) wake(targetSessionID, input.from)
   }
 
   /**
@@ -338,7 +338,7 @@ export namespace TeamMessaging {
             })
           })
 
-          autoWake(senderSessionID, agentName)
+          wake(senderSessionID, agentName)
         }
       }
       log.info("delivery receipts sent", { teamName, from: agentName, senders: [...bySender.keys()] })
@@ -395,8 +395,12 @@ export namespace TeamMessaging {
       agentName === "lead" ? team.leadSessionID : team.members.find((m) => m.name === agentName)?.sessionID
     if (!sessionID) return 0
     const count = await recoverInbox(teamName, agentName, sessionID)
-    if (count > 0) autoWake(sessionID, "system")
+    if (count > 0) wake(sessionID, "system")
     return count
+  }
+
+  export async function wake(sessionID: string, from: string) {
+    return autoWake(sessionID, from)
   }
 
   /**

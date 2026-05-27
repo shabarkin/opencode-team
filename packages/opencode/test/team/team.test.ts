@@ -937,6 +937,11 @@ describe("Team steering", () => {
             text: "retry",
           }),
         ).toBe("restart")
+        const status = spyOn(SessionStatus, "get").mockResolvedValueOnce({ type: "busy" } as any).mockResolvedValue({
+          type: "idle",
+        } as any)
+        const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue(undefined)
+        const wake = spyOn(TeamMessaging, "wake").mockResolvedValue(undefined)
         expect(
           await Team.steer({
             teamName: "steer-team",
@@ -967,7 +972,12 @@ describe("Team steering", () => {
           to: "busy-worker",
           text: "adjust course",
         })
+        expect(cancel).toHaveBeenCalledWith("ses_steer_busy")
+        expect(wake).toHaveBeenCalledWith("ses_steer_busy", "lead")
 
+        wake.mockRestore()
+        cancel.mockRestore()
+        status.mockRestore()
         send.mockRestore()
         await Team.setMemberStatus("steer-team", "ready-worker", "shutdown")
         await Team.setMemberStatus("steer-team", "error-worker", "shutdown")
@@ -1081,19 +1091,19 @@ describe("Team steering", () => {
           status: "shutdown_requested",
         })
 
-        const broadcast = spyOn(TeamMessaging, "broadcast").mockResolvedValue({ targets: 1, delivered: 1, errors: [] })
+        const send = spyOn(TeamMessaging, "send").mockResolvedValue(undefined)
 
         const result = await Team.steerAll({ teamName: "steer-all-team", text: "regroup" })
         expect(result).toEqual({ targets: 1, delivered: 1, errors: [] })
-        expect(broadcast).toHaveBeenCalledTimes(1)
-        expect(broadcast).toHaveBeenCalledWith({
+        expect(send).toHaveBeenCalledTimes(1)
+        expect(send).toHaveBeenCalledWith({
           teamName: "steer-all-team",
           from: "lead",
+          to: "ready-worker",
           text: "regroup",
-          targets: ["ready-worker"],
         })
 
-        broadcast.mockRestore()
+        send.mockRestore()
         await Team.setMemberStatus("steer-all-team", "ready-worker", "shutdown")
         await Team.setMemberStatus("steer-all-team", "paused-worker", "shutdown")
         await Team.setMemberStatus("steer-all-team", "stopping-worker", "shutdown")
