@@ -138,6 +138,7 @@ export const {
     const sdk = useSDK()
 
     const fullSyncedSessions = new Set<string>()
+    let syncedWorkspace = project.workspace.current()
     const syncingSessions = new Map<string, Promise<void>>()
     const hydratingSessions = new Map<string, { messages: Set<string>; parts: Set<string> }>()
     const touchMessage = (sessionID: string, messageID: string) => {
@@ -459,6 +460,14 @@ export const {
     async function bootstrap(input: { fatal?: boolean } = {}) {
       const fatal = input.fatal ?? true
       const workspace = project.workspace.current()
+      // Workspace switching reuses the same SyncProvider instance (it is mounted statically in
+      // app.tsx, not keyed by workspace), so drop the already-synced markers when the workspace
+      // changes — otherwise sessions synced under a previously-visited workspace stay flagged as
+      // fully synced and their messages/team data never re-hydrate.
+      if (workspace !== syncedWorkspace) {
+        fullSyncedSessions.clear()
+        syncedWorkspace = workspace
+      }
       const projectPromise = project.sync()
       const sessionListPromise = projectPromise.then(() => listSessions())
 
