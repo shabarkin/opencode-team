@@ -1,5 +1,5 @@
 import { LocalContext } from "@/util/local-context"
-import { AppFileSystem } from "@opencode-ai/core/filesystem"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import type * as Project from "./project"
 
 export interface InstanceContext {
@@ -16,9 +16,9 @@ export const context = LocalContext.create<InstanceContext>("instance")
  * Paths within sibling worktrees or managed sandboxes should not trigger external_directory permission.
  */
 export function containsPath(filepath: string, ctx: InstanceContext): boolean {
-  if (AppFileSystem.contains(ctx.directory, filepath)) return true
+  if (FSUtil.contains(ctx.directory, filepath)) return true
   // Non-git projects set worktree to "/" which would match ANY absolute path.
   // Skip worktree check in this case to preserve external_directory permissions.
-  if (ctx.worktree !== "/" && AppFileSystem.contains(ctx.worktree, filepath)) return true
-  return (ctx.project.sandboxes ?? []).some((dir) => AppFileSystem.contains(dir, filepath))
+  if (ctx.worktree !== "/" && FSUtil.contains(ctx.worktree, filepath)) return true
+  return (ctx.project.sandboxes ?? []).some((dir) => FSUtil.contains(dir, filepath))
 }

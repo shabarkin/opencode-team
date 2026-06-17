@@ -1,19 +1,21 @@
 import * as path from "path"
 import { Effect, Schema } from "effect"
 import * as Tool from "./tool"
-import { Bus } from "../bus"
-import { FileWatcher } from "../file/watcher"
+import { EventV2Bridge } from "@/event-v2-bridge"
+import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 import { InstanceState } from "@/effect/instance-state"
 import { Patch } from "../patch"
 import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { trimDiff } from "./edit"
 import { LSP } from "@/lsp/lsp"
-import { AppFileSystem } from "@opencode-ai/core/filesystem"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import DESCRIPTION from "./apply_patch.txt"
-import { File } from "../file"
+import { FileSystem } from "@opencode-ai/core/filesystem"
 import { Format } from "../format"
 import { permPath } from "./perm"
+import { Bus } from "../bus"
+import { File } from "../file"
 import * as Bom from "@/util/bom"
 
 export const Parameters = Schema.Struct({
@@ -24,9 +26,9 @@ export const ApplyPatchTool = Tool.define(
   "apply_patch",
   Effect.gen(function* () {
     const lsp = yield* LSP.Service
-    const afs = yield* AppFileSystem.Service
+    const afs = yield* FSUtil.Service
     const format = yield* Format.Service
-    const bus = yield* Bus.Service
+    const events = yield* EventV2Bridge.Service
 
     const run = Effect.fn("ApplyPatchTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -219,23 +221,20 @@ export const ApplyPatchTool = Tool.define(
 
       // Apply the changes
       const updates: Array<{ file: string; event: "add" | "change" | "unlink" }> = []
-      const edited: string[] = []
 
       for (const change of fileChanges) {
-        const target = change.type === "delete" ? undefined : (change.movePath ?? change.filePath)
+        const edited = change.type === "delete" ? undefined : (change.movePath ?? change.filePath)
         switch (change.type) {
           case "add":
             // Create parent directories (recursive: true is safe on existing/root dirs)
 
             yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
             updates.push({ file: change.filePath, event: "add" })
-            edited.push(change.filePath)
             break
 
           case "update":
             yield* afs.writeWithDirs(change.filePath, Bom.join(change.newContent, change.bom))
             updates.push({ file: change.filePath, event: "change" })
-            edited.push(change.filePath)
             break
 
           case "move":
@@ -246,31 +245,29 @@ export const ApplyPatchTool = Tool.define(
               yield* afs.remove(change.filePath)
               updates.push({ file: change.filePath, event: "unlink" })
               updates.push({ file: change.movePath, event: "add" })
-              edited.push(change.filePath, change.movePath)
             }
             break
 
           case "delete":
             yield* afs.remove(change.filePath)
             updates.push({ file: change.filePath, event: "unlink" })
-            edited.push(change.filePath)
             break
         }
 
-        if (target) {
-          if (yield* format.file(target)) {
-            yield* Bom.syncFile(afs, target, change.bom)
+        if (edited) {
+          if (yield* format.file(edited)) {
+            yield* Bom.syncFile(afs, edited, change.bom)
           }
+          yield* events.publish(FileSystem.Event.Edited, { file: edited })
         }
-      }
-
-      for (const file of edited) {
-        yield* bus.publish(File.Event.Edited, { file, sessionID: ctx.sessionID })
       }
 
       // Publish file change events
       for (const update of updates) {
-        yield* bus.publish(FileWatcher.Event.Updated, update)
+        yield* Effect.promise(() =>
+          Bus.publish(instance, File.Event.Edited, { file: update.file, sessionID: ctx.sessionID }),
+        )
+        yield* events.publish(Watcher.Event.Updated, update)
       }
 
       // Notify LSP of file changes and collect diagnostics
@@ -297,7 +294,7 @@ export const ApplyPatchTool = Tool.define(
       for (const change of fileChanges) {
         if (change.type === "delete") continue
         const target = change.movePath ?? change.filePath
-        const block = LSP.Diagnostic.report(target, diagnostics[AppFileSystem.normalizePath(target)] ?? [])
+        const block = LSP.Diagnostic.report(target, diagnostics[FSUtil.normalizePath(target)] ?? [])
         if (!block) continue
         const rel = permPath(target, { dir: instance.directory, root: instance.worktree })
         output += `\n\nLSP errors detected in ${rel}, please fix:\n${block}`

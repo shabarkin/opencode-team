@@ -1,6 +1,6 @@
 import { Context, Effect, Exit, Fiber } from "effect"
 import { WorkspaceContext } from "@/control-plane/workspace-context"
-import type { WorkspaceID } from "@/control-plane/schema"
+import type { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { InstanceRef, WorkspaceRef } from "./instance-ref"
 import { attachWith } from "./run-service"
 import { context as instanceContext } from "@/project/instance-context"
@@ -13,7 +13,7 @@ export interface Shape {
   readonly bind: <Args extends readonly unknown[], Result>(fn: (...args: Args) => Result) => (...args: Args) => Result
 }
 
-function restoreWorkspace<R>(workspace: WorkspaceID | undefined, fn: () => R): R {
+function restoreWorkspace<R>(workspace: WorkspaceV2.ID | undefined, fn: () => R): R {
   if (workspace !== undefined) return WorkspaceContext.restore(workspace, fn)
   return fn()
 }
@@ -23,7 +23,7 @@ function restoreInstance<R>(instance: InstanceContext | undefined, fn: () => R):
   return fn()
 }
 
-function restoreRefs<R>(refs: { instance?: InstanceContext; workspace?: WorkspaceID }, fn: () => R): R {
+function restoreRefs<R>(refs: { instance?: InstanceContext; workspace?: WorkspaceV2.ID }, fn: () => R): R {
   return restoreWorkspace(refs.workspace, () => restoreInstance(refs.instance, fn))
 }
 

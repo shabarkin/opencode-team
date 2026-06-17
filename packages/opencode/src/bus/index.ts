@@ -1,18 +1,25 @@
 import { Effect, Exit, Layer, PubSub, Scope, Context, Stream, Schema } from "effect"
 import { EffectBridge } from "@/effect/bridge"
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@/util/log"
 import { BusEvent } from "./bus-event"
+import type { EventV2 } from "@opencode-ai/core/event"
 import { GlobalBus } from "./global"
 import { InstanceState } from "@/effect/instance-state"
 import { makeRuntime } from "@/effect/run-service"
-import { serviceUse } from "@/effect/service-use"
+import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Identifier } from "@/id/id"
 import type { InstanceContext } from "@/project/instance-context"
 import { InstanceRef } from "@/effect/instance-ref"
 
 const log = Log.create({ service: "bus" })
 
-type BusProperties<D extends BusEvent.Definition<string, Schema.Top>> = Schema.Schema.Type<D["properties"]>
+type Definition = BusEvent.Definition | EventV2.Definition
+type DefinitionProperties<D extends Definition> = D extends BusEvent.Definition
+  ? D["properties"]
+  : D extends EventV2.Definition
+    ? D["data"]
+    : never
+type BusProperties<D extends Definition> = Schema.Schema.Type<DefinitionProperties<D>>
 
 export const InstanceDisposed = BusEvent.define(
   "server.instance.disposed",
@@ -21,7 +28,7 @@ export const InstanceDisposed = BusEvent.define(
   }),
 )
 
-type Payload<D extends BusEvent.Definition = BusEvent.Definition> = {
+type Payload<D extends Definition = Definition> = {
   id: string
   type: D["type"]
   properties: BusProperties<D>
@@ -33,7 +40,7 @@ type State = {
 }
 
 export interface Interface {
-  readonly publish: <D extends BusEvent.Definition>(
+  readonly publish: <D extends Definition>(
     def: D,
     properties: BusProperties<D>,
     options?: { id?: string },
@@ -44,11 +51,11 @@ export interface Interface {
   // Stream-returning shape acquired the subscription lazily on first pull,
   // opening a race window during which publishes were lost — see
   // test/bus/bus-effect.test.ts RACE tests.
-  readonly subscribe: <D extends BusEvent.Definition>(
+  readonly subscribe: <D extends Definition>(
     def: D,
   ) => Effect.Effect<Stream.Stream<Payload<D>>, never, Scope.Scope>
   readonly subscribeAll: () => Effect.Effect<Stream.Stream<Payload>, never, Scope.Scope>
-  readonly subscribeCallback: <D extends BusEvent.Definition>(
+  readonly subscribeCallback: <D extends Definition>(
     def: D,
     callback: (event: Payload<D>) => unknown,
   ) => Effect.Effect<() => void>
@@ -86,7 +93,7 @@ export const layer = Layer.effect(
       }),
     )
 
-    function getOrCreate<D extends BusEvent.Definition>(state: State, def: D) {
+    function getOrCreate<D extends Definition>(state: State, def: D) {
       return Effect.gen(function* () {
         let ps = state.typed.get(def.type)
         if (!ps) {
@@ -97,7 +104,7 @@ export const layer = Layer.effect(
       })
     }
 
-    function publish<D extends BusEvent.Definition>(def: D, properties: BusProperties<D>, options?: { id?: string }) {
+    function publish<D extends Definition>(def: D, properties: BusProperties<D>, options?: { id?: string }) {
       return Effect.gen(function* () {
         const s = yield* InstanceState.get(state)
         const payload: Payload = { id: options?.id ?? createID(), type: def.type, properties }
@@ -120,7 +127,7 @@ export const layer = Layer.effect(
       })
     }
 
-    const subscribe = <D extends BusEvent.Definition>(
+    const subscribe = <D extends Definition>(
       def: D,
     ): Effect.Effect<Stream.Stream<Payload<D>>, never, Scope.Scope> =>
       Effect.gen(function* () {
@@ -169,7 +176,7 @@ export const layer = Layer.effect(
       })
     }
 
-    const subscribeCallback = Effect.fn("Bus.subscribeCallback")(function* <D extends BusEvent.Definition>(
+    const subscribeCallback = Effect.fn("Bus.subscribeCallback")(function* <D extends Definition>(
       def: D,
       callback: (event: Payload<D>) => unknown,
     ) {
@@ -197,35 +204,44 @@ export function createID() {
   return Identifier.create("evt", "ascending")
 }
 
-export async function publish<D extends BusEvent.Definition>(
+function isDefinition(input: unknown): input is Definition {
+  return (
+    typeof input === "object" &&
+    input !== null &&
+    "type" in input &&
+    ("properties" in input || "data" in input)
+  )
+}
+
+export async function publish<D extends Definition>(
   ctx: InstanceContext,
   def: D,
   properties: BusProperties<D>,
   options?: { id?: string },
 ): Promise<void>
-export async function publish<D extends BusEvent.Definition>(
+export async function publish<D extends Definition>(
   def: D,
   properties: BusProperties<D>,
   options?: { id?: string },
 ): Promise<void>
-export async function publish<D extends BusEvent.Definition>(
+export async function publish<D extends Definition>(
   ctxOrDef: InstanceContext | D,
   defOrProperties: D | BusProperties<D>,
   propertiesOrOptions?: BusProperties<D> | { id?: string },
   maybeOptions?: { id?: string },
 ) {
-  const legacy = "type" in ctxOrDef && "properties" in ctxOrDef
-  const def = (legacy ? ctxOrDef : defOrProperties) as D
-  const properties = (legacy ? defOrProperties : propertiesOrOptions) as BusProperties<D>
-  const options = (legacy ? propertiesOrOptions : maybeOptions) as { id?: string } | undefined
+  const direct = isDefinition(ctxOrDef)
+  const def = (direct ? ctxOrDef : defOrProperties) as D
+  const properties = (direct ? defOrProperties : propertiesOrOptions) as BusProperties<D>
+  const options = (direct ? propertiesOrOptions : maybeOptions) as { id?: string } | undefined
   return runPromise((svc) =>
-    legacy
+    direct
       ? svc.publish(def, properties, options)
       : svc.publish(def, properties, options).pipe(Effect.provideService(InstanceRef, ctxOrDef as InstanceContext)),
   )
 }
 
-export function subscribe<D extends BusEvent.Definition>(def: D, callback: (event: Payload<D>) => unknown) {
+export function subscribe<D extends Definition>(def: D, callback: (event: Payload<D>) => unknown) {
   return runSync((svc) => svc.subscribeCallback(def, callback))
 }
 

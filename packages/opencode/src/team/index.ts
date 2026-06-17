@@ -1,6 +1,6 @@
 import z from "zod"
 import path from "path"
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@/util/log"
 import { Bus } from "../bus"
 import { Instance } from "../project/instance"
 import { Storage } from "./runtime"
@@ -136,6 +136,7 @@ const CREATE_LOCK_KEY = () => `team:create:${Instance.project.id}`
 const AUTO_CLEANUP_GRACE = 60_000
 const SHUTDOWN_TIMEOUT = 30_000
 const auto = new Map<string, ReturnType<typeof setTimeout>>()
+const autoCleanupListeners = new Map<string, { custom: boolean; stop: () => void }>()
 const checkpoint = new Set<string>()
 const cleaning = new Set<string>()
 
@@ -561,6 +562,14 @@ export namespace Team {
    * Called once during InstanceBootstrap.
    */
   export function autoCleanup(options?: { grace?: number }): () => void {
+    const listenerKey = Instance.project.id
+    const custom = options?.grace !== undefined
+    const existing = autoCleanupListeners.get(listenerKey)
+    if (existing) {
+      if (!custom && existing.custom) return () => {}
+      existing.stop()
+    }
+
     const grace = options?.grace ?? AUTO_CLEANUP_GRACE
     const offStatus = Bus.subscribe(TeamEvent.MemberStatusChanged, async (event) => {
       if (event.properties.status !== "shutdown") return
@@ -614,10 +623,13 @@ export namespace Team {
       clearAuto(event.properties.teamName)
     })
 
-    return () => {
+    const stop = () => {
       offStatus()
       offCleaned()
+      if (autoCleanupListeners.get(listenerKey)?.stop === stop) autoCleanupListeners.delete(listenerKey)
     }
+    autoCleanupListeners.set(listenerKey, { custom, stop })
+    return stop
   }
 
   export function trackResults() {
@@ -1663,7 +1675,7 @@ export namespace Team {
     if (timeoutMs) {
       timeoutHandle = setTimeout(async () => {
         log.warn("teammate timeout", { teamName: input.teamName, name: input.name, timeout: input.timeout })
-        await transitionExecutionStatus(input.teamName, input.name, "timed_out")
+        await transitionExecutionStatus(input.teamName, input.name, "timed_out", { force: true })
         await transitionMemberStatus(input.teamName, input.name, "error", { force: true })
         await setMemberErrorKind(input.teamName, input.name, "timeout")
         await SessionPrompt.cancel(session.id)

@@ -1,4 +1,4 @@
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@/util/log"
 import { Storage } from "./runtime"
 import { Instance } from "../project/instance"
 

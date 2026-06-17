@@ -1,4 +1,4 @@
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@/util/log"
 import * as Lock from "../util/lock"
 import { Global } from "@opencode-ai/core/global"
 import { Instance } from "../project/instance"

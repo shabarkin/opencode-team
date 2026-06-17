@@ -14,7 +14,8 @@
  */
 
 import { makeRuntime } from "@/effect/run-service"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
+import { Database } from "@opencode-ai/core/database/database"
 import * as StorageNs from "../storage/storage"
 import * as SessionNs from "../session/session"
 import * as SessionStatusNs from "../session/status"
@@ -26,7 +27,7 @@ import * as ProjectNs from "../project/project"
 import * as MessageV2Ns from "../session/message-v2"
 import { MessageID, PartID, type SessionID } from "../session/schema"
 import { lazy } from "@/util/lazy"
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@/util/log"
 
 const log = Log.create({ service: "team.runtime" })
 
@@ -46,6 +47,7 @@ const log = Log.create({ service: "team.runtime" })
 // ---------------------------------------------------------------------------
 
 const storageRt = lazy(() => makeRuntime(StorageNs.Service, StorageNs.defaultLayer))
+const databaseRt = lazy(() => makeRuntime(Database.Service, Database.defaultLayer))
 
 export const Storage = {
   write: <T>(key: string[], content: T) => storageRt().runPromise((s) => s.write(key, content)),
@@ -53,6 +55,11 @@ export const Storage = {
   update: <T>(key: string[], fn: (draft: T) => void) => storageRt().runPromise((s) => s.update<T>(key, fn)),
   remove: (key: string[]) => storageRt().runPromise((s) => s.remove(key)),
   list: (prefix: string[]) => storageRt().runPromise((s) => s.list(prefix)),
+}
+
+export const MessageV2 = {
+  page: (input: Parameters<typeof MessageV2Ns.page>[0]) =>
+    databaseRt().runPromise((db) => MessageV2Ns.page(input).pipe(Effect.provideService(Database.Service, db))),
 }
 
 // ---------------------------------------------------------------------------
@@ -99,7 +106,9 @@ export const SessionStatus = {
 // SessionPrompt
 // ---------------------------------------------------------------------------
 
-const sessionPromptRt = lazy(() => makeRuntime(SessionPromptNs.Service, SessionPromptNs.defaultLayer))
+const sessionPromptRt = lazy(() =>
+  makeRuntime(SessionPromptNs.Service, SessionPromptNs.defaultLayer as Layer.Layer<SessionPromptNs.Service, never>),
+)
 
 /**
  * Original team `inject` — synthesizes a user message into a session as if
@@ -120,7 +129,9 @@ function injectEffect(input: {
     let user: MessageV2Ns.User | undefined
     let before: string | undefined
     for (let i = 0; i < 10 && !user; i++) {
-      const pageItems = (yield* MessageV2Ns.page({ sessionID: input.sessionID, limit: 50, before })).items
+      const pageItems = (yield* Effect.promise(() =>
+        MessageV2.page({ sessionID: input.sessionID, limit: 50, before }),
+      )).items
       const found = pageItems.findLast((item) => item.info.role === "user")
       if (found && found.info.role === "user") {
         user = found.info as MessageV2Ns.User

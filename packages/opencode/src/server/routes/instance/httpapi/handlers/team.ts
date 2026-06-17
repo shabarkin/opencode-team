@@ -12,8 +12,10 @@ import { Session, SessionPrompt } from "@/team/runtime"
 import { TeamMessaging } from "@/team/messaging"
 import { InstanceRef } from "@/effect/instance-ref"
 import { context as instanceContext } from "@/project/instance-context"
+import { InstanceRuntime } from "@/project/instance-runtime"
+import { InstanceStore } from "@/project/instance-store"
 import { Flag } from "@opencode-ai/core/flag/flag"
-import { Cause, Effect, Schema } from "effect"
+import { Cause, Effect, Option, Schema } from "effect"
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import z from "zod"
 
@@ -73,6 +75,16 @@ function caller(request: HttpServerRequest.HttpServerRequest) {
   return sessionID(request.headers["x-opencode-session"])
 }
 
+function requestDirectory(request: HttpServerRequest.HttpServerRequest) {
+  const url = new URL(request.url, "http://localhost")
+  const directory = url.searchParams.get("directory") || request.headers["x-opencode-directory"] || process.cwd()
+  try {
+    return decodeURIComponent(directory)
+  } catch {
+    return directory
+  }
+}
+
 function requests(team: Info, full: boolean) {
   if (full) return team.pending_spawn_requests
   return (team.pending_spawn_requests ?? []).map((item) => PendingSpawnRequestPublicSchema.parse(item))
@@ -124,8 +136,22 @@ const body = <T>(schema: z.ZodType<T>) =>
 const legacy = <A>(fn: () => Promise<A>) =>
   Effect.gen(function* () {
     const ctx = yield* InstanceRef
+    const request = yield* HttpServerRequest.HttpServerRequest
+    const directory = requestDirectory(request)
+    const fallback = yield* Effect.sync(() => {
+      try {
+        return instanceContext.use()
+      } catch {
+        return undefined
+      }
+    })
+    const store = Option.getOrUndefined(yield* Effect.serviceOption(InstanceStore.Service))
+    const next =
+      ctx ??
+      fallback ??
+      (store ? yield* store.load({ directory }) : yield* Effect.promise(() => InstanceRuntime.load({ directory })))
     return yield* Effect.tryPromise({
-      try: () => (ctx ? instanceContext.provide(ctx, fn) : fn()),
+      try: () => instanceContext.provide(next, fn),
       catch: (err) => err,
     })
   })
@@ -136,8 +162,8 @@ const SessionParam = Schema.Struct({ sessionID: Schema.String })
 const teamNameParam = Effect.map(HttpRouter.schemaPathParams(TeamNameParam), (input) => TeamNameSchema.parse(input.name))
 const sessionParam = Effect.map(HttpRouter.schemaPathParams(SessionParam), (input) => SessionID.make(input.sessionID))
 
-function requireLead(request: HttpServerRequest.HttpServerRequest, name: string): Effect.Effect<LeadCheck, unknown> {
-  return legacy(async () => {
+function requireLead(request: HttpServerRequest.HttpServerRequest, name: string) {
+  return legacy(async (): Promise<LeadCheck> => {
     const sid = caller(request)
     if (!sid) return { error: forbidden() } as const
     const match = await Team.findBySession(sid)

@@ -1,7 +1,7 @@
 import fs from "fs/promises"
 import path from "path"
 import { Global } from "@opencode-ai/core/global"
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@/util/log"
 import * as Process from "../util/process"
 
 /**

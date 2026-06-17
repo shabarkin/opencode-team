@@ -1,8 +1,8 @@
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@/util/log"
 import { Effect } from "effect"
 import { Bus } from "../bus"
 import { MessageV2 } from "../session/message-v2"
-import { SessionPrompt, SessionStatus } from "./runtime"
+import { MessageV2 as MessageV2Runtime, SessionPrompt, SessionStatus } from "./runtime"
 import { SessionID, MessageID, PartID } from "../session/schema"
 import { Team, TeamEvent } from "./index"
 import { Inbox, type InboxMessage } from "./inbox"
@@ -360,7 +360,7 @@ export namespace TeamMessaging {
     const ids = new Set(pending.map((msg) => msg.id))
     let before: string | undefined
     while (true) {
-      const page = await Effect.runPromise(MessageV2.page({ sessionID: SessionID.make(sessionID), limit: 50, before }))
+      const page = await MessageV2Runtime.page({ sessionID: SessionID.make(sessionID), limit: 50, before })
       for (const msg of page.items) {
         for (const part of msg.parts) {
           const meta = (part as { metadata?: Record<string, unknown> }).metadata
@@ -421,7 +421,7 @@ export namespace TeamMessaging {
         const member = info.team.members.find((m) => m.name === info.memberName)
         if (member?.status === "shutdown" || member?.status === "paused") return
         if (member?.status !== "busy" && member?.status !== "shutdown_requested") {
-          await Team.transitionMemberStatus(info.team.name, info.memberName!, "busy", { force: true })
+          await Team.transitionMemberStatus(info.team.name, info.memberName!, "busy", { guard: true, force: true })
         }
         await Team.transitionExecutionStatus(info.team.name, info.memberName!, "starting", { force: true })
         await Team.transitionExecutionStatus(info.team.name, info.memberName!, "running", { force: true })
@@ -443,7 +443,7 @@ export namespace TeamMessaging {
           }
           if (member?.status === "paused") return
           if (member?.status === "busy") {
-            await Team.transitionMemberStatus(match.team.name, match.memberName!, "ready", { force: true })
+            await Team.transitionMemberStatus(match.team.name, match.memberName!, "ready", { guard: true, force: true })
           }
         })
         .catch(async (err: unknown) => {
@@ -452,7 +452,7 @@ export namespace TeamMessaging {
           if (match && match.role === "member") {
             await Team.transitionExecutionStatus(match.team.name, match.memberName!, "failed", { force: true })
             await Team.transitionExecutionStatus(match.team.name, match.memberName!, "idle", { force: true })
-            await Team.transitionMemberStatus(match.team.name, match.memberName!, "error", { force: true })
+            await Team.transitionMemberStatus(match.team.name, match.memberName!, "error", { guard: true, force: true })
           }
           log.warn("auto-wake loop failed", { sessionID, error: message })
         })

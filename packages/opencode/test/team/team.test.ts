@@ -555,7 +555,7 @@ describe("Team auto-cleanup", () => {
       },
       fn: async () => {
         const events: Array<{ teamName: string; grace: number; cleanupAt: number }> = []
-        const stop = Team.autoCleanup({ grace: 300 })
+        const stop = Team.autoCleanup({ grace: 1_000 })
         const off = Bus.subscribe(TeamEvent.AllMembersShutdown, (event) => {
           events.push(event.properties)
         })
@@ -593,7 +593,7 @@ describe("Team auto-cleanup", () => {
         expect(events).toHaveLength(1)
         expect(events[0]).toMatchObject({
           teamName: "auto-clean-team",
-          grace: 300,
+          grace: 1_000,
         })
         expect(events[0]!.cleanupAt).toBeGreaterThanOrEqual(Date.now() - 1000)
 
@@ -603,7 +603,7 @@ describe("Team auto-cleanup", () => {
         const note = await callTeamTool(TeamNotepadTool, { action: "read", key: "summary" }, ctx)
         expect(note.output).toBe("results ready")
 
-        await Bun.sleep(400)
+        await Bun.sleep(1_100)
         const gone = await Team.get("auto-clean-team")
         expect(gone).toBeUndefined()
 

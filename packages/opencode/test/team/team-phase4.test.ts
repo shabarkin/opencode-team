@@ -1040,9 +1040,14 @@ describe("team phase 4", () => {
             timeout: 1,
           })
 
-          const timeout = waits.find((item) => item.ms === 60_000)
-          expect(timeout).toBeDefined()
-          await timeout!.fn()
+          const timeouts = waits.filter((item) => item.ms === 60_000).reverse()
+          expect(timeouts.length).toBeGreaterThan(0)
+          for (const timeout of timeouts) {
+            await timeout.fn()
+            const team = await Team.get("phase4-timeout")
+            const member = team?.members.find((item) => item.name === "worker")
+            if (member?.error_kind === "timeout") break
+          }
 
           const team = await Team.get("phase4-timeout")
           const member = team?.members.find((item) => item.name === "worker")

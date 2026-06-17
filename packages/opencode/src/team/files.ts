@@ -1,4 +1,4 @@
-import * as Log from "@opencode-ai/core/util/log"
+import * as Log from "@/util/log"
 import { Bus } from "../bus"
 import { File } from "../file"
 import { Instance } from "../project/instance"
