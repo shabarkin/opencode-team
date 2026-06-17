@@ -1433,40 +1433,50 @@ describe("Team tool definitions", () => {
           status: "ready",
         })
 
-        const wait: Array<() => Promise<void>> = []
+        const wait: Array<{ fn: () => Promise<void>; delay: number | undefined; stack?: string }> = []
         const send = spyOn(TeamMessaging, "send").mockImplementation(async () => {})
         const status = spyOn(SessionStatus, "get").mockResolvedValue({ type: "idle" } as any)
         const loop = spyOn(SessionPrompt, "loop").mockImplementation(((_input: any) => new Promise(() => {})) as any)
         const cancel = spyOn(SessionPrompt, "cancel").mockResolvedValue(undefined)
-        const timer = spyOn(globalThis, "setTimeout").mockImplementation(((fn: () => Promise<void>) => {
-          wait.push(fn)
-          return 1 as any
-        }) as any)
-
-        await callTeamTool(TeamShutdownTool, { name: "worker-z" }, {
-          sessionID: "ses_shutdown_timeout_lead",
-          messageID: "msg_1",
-          agent: "general",
-          abort: new AbortController().signal,
-          messages: [],
-          metadata: () => Effect.void,
-          ask: () => Effect.void,
-        } as any)
-
-        expect(wait).toHaveLength(1)
-        await wait[0]!()
-
-        expect(cancel).not.toHaveBeenCalled()
-        expect((await Team.get("shutdown-timeout-team"))?.members.find((m) => m.name === "worker-z")?.status).toBe(
-          "shutdown",
+        const timer = spyOn(globalThis, "setTimeout").mockImplementation(
+          ((fn: () => Promise<void>, delay?: number) => {
+            wait.push({ fn, delay, stack: new Error().stack })
+            return 1 as any
+          }) as any,
         )
 
-        timer.mockRestore()
-        cancel.mockRestore()
-        loop.mockRestore()
-        status.mockRestore()
-        send.mockRestore()
-        await Team.cleanup("shutdown-timeout-team")
+        try {
+          await callTeamTool(TeamShutdownTool, { name: "worker-z" }, {
+            sessionID: "ses_shutdown_timeout_lead",
+            messageID: "msg_1",
+            agent: "general",
+            abort: new AbortController().signal,
+            messages: [],
+            metadata: () => Effect.void,
+            ask: () => Effect.void,
+          } as any)
+
+          const shutdownWait = wait.filter(
+            (item) => item.delay === 30_000 && item.stack?.includes("src/team/index.ts"),
+          )
+          expect(shutdownWait).toHaveLength(1)
+          await shutdownWait[0]!.fn()
+
+          expect(cancel).not.toHaveBeenCalled()
+          expect((await Team.get("shutdown-timeout-team"))?.members.find((m) => m.name === "worker-z")?.status).toBe(
+            "shutdown",
+          )
+        } finally {
+          timer.mockRestore()
+          cancel.mockRestore()
+          loop.mockRestore()
+          status.mockRestore()
+          send.mockRestore()
+          await Team.transitionMemberStatus("shutdown-timeout-team", "worker-z", "shutdown", { force: true }).catch(
+            () => {},
+          )
+          await Team.cleanup("shutdown-timeout-team").catch(() => {})
+        }
       },
     })
   })

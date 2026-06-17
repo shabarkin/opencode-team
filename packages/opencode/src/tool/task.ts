@@ -16,6 +16,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Database } from "@opencode-ai/core/database/database"
 import { Team } from "../team"
 import { TEAM_TOOL_IDS } from "./team-ids"
+import { Flag } from "@opencode-ai/core/flag/flag"
 
 export interface TaskPromptOps {
   cancel(sessionID: SessionID): Effect.Effect<void>
@@ -127,8 +128,12 @@ export const TaskTool = Tool.define(
         return yield* Effect.fail(new Error(`task_id "${params.task_id}" does not belong to this session.`))
       }
       const parent = yield* sessions.get(ctx.sessionID)
-      const teamInfo = yield* Effect.promise(() => Team.findBySession(ctx.sessionID).catch(() => undefined))
+      const teamsEnabled = Flag.OPENCODE_EXPERIMENTAL_AGENT_TEAMS
+      const teamInfo = teamsEnabled
+        ? yield* Effect.promise(() => Team.findBySession(ctx.sessionID).catch(() => undefined))
+        : undefined
       const linked = yield* Effect.promise(async () => {
+        if (!teamsEnabled) return undefined
         if (teamInfo?.role === "member" && teamInfo.memberName) {
           return { parentTeam: teamInfo.team.name, parentMember: teamInfo.memberName, mode: "task" as const }
         }
@@ -137,37 +142,39 @@ export const TaskTool = Tool.define(
       })
       const allowPad = teamInfo?.role === "member" && !!teamInfo.memberName
       const teamTools = TEAM_TOOL_IDS.filter((tool) => !allowPad || tool !== "team_notepad")
-      const teamPermission = [
-        ...teamTools.map((permission) => ({
-          permission,
-          pattern: "*",
-          action: "deny" as const,
-        })),
-        ...(allowPad
-          ? [
-              {
-                permission: "team_notepad",
-                pattern: "read",
-                action: "allow" as const,
-              },
-              {
-                permission: "team_notepad",
-                pattern: "list",
-                action: "allow" as const,
-              },
-              {
-                permission: "team_notepad",
-                pattern: "write",
-                action: "deny" as const,
-              },
-              {
-                permission: "team_notepad",
-                pattern: "delete",
-                action: "deny" as const,
-              },
-            ]
-          : []),
-      ]
+      const teamPermission = teamsEnabled
+        ? [
+            ...teamTools.map((permission) => ({
+              permission,
+              pattern: "*",
+              action: "deny" as const,
+            })),
+            ...(allowPad
+              ? [
+                  {
+                    permission: "team_notepad",
+                    pattern: "read",
+                    action: "allow" as const,
+                  },
+                  {
+                    permission: "team_notepad",
+                    pattern: "list",
+                    action: "allow" as const,
+                  },
+                  {
+                    permission: "team_notepad",
+                    pattern: "write",
+                    action: "deny" as const,
+                  },
+                  {
+                    permission: "team_notepad",
+                    pattern: "delete",
+                    action: "deny" as const,
+                  },
+                ]
+              : []),
+          ]
+        : []
       const childPermission = deriveSubagentSessionPermission({
         parentSessionPermission: parent.permission ?? [],
         subagent: next,
